@@ -27,24 +27,41 @@ Every invariant has an enforcement mechanism and a test in `tests/security/`.
 
 Every kind of session has an explicit tool **allowlist** ([04](04-engine.md#session-kinds)).
 Shell, REPL, notebook, subagent (`Task`/`Agent`) and MCP tools are never
-available. Enforced three times: by the CLI `--tools` list, by
-`--strict-mcp-config` with no MCP config, and by the guard, which denies any
-tool not on the allowlist, including every `mcp__*` name.
+available. Enforced four times: by the CLI `--tools` list, which the
+executor checks against the tools the session actually reports; by
+`--strict-mcp-config` and `--setting-sources ""`, so no MCP server or plugin
+is loaded; by `--permission-mode dontAsk`, so no tool runs without the
+guard's approval; and by the guard, which denies any tool not on the
+allowlist, including every `mcp__*` name. The guard can only ever allow the
+tools it knows how to check (`Read`, `Glob`, `Grep`, `Write`, `Edit`,
+`WebSearch`, `WebFetch` and `StructuredOutput`), and it denies any tool
+argument it doesn't recognise.
 
 ### I2. Reads are confined to the staging directory
 
 Each session runs in a fresh staging directory that holds **copies** of only
 the files it needs. The guard resolves every path argument (`file_path`,
-`path`, `notebook_path`) with `realpath` and requires it to be inside the
-staging directory. Glob and Grep patterns (`pattern`, `glob`) must be
-relative and must not contain `..`. Absolute patterns are denied. Restricted
-mode ([05](05-executors.md)) adds another layer where it is available.
+and the `path` of Glob and Grep) against the staging directory, applies
+`realpath`, and requires the result to be inside the staging directory,
+comparing whole path components. Paths starting with `~` are denied, and so
+is any path or pattern with leading or trailing whitespace, a control
+character, or more than 4096 bytes, and brace nesting in a pattern is
+limited to 16 levels: the CLI trims Glob's and Grep's `path`
+after the hook has seen it, so `" /etc"` would otherwise be checked as a
+folder inside the staging directory and read as `/etc`. Glob's
+`pattern` and Grep's `glob` must be relative and must not contain `..`: brace
+alternatives are expanded and each one is checked, and backslashes are
+denied. Grep's `pattern` is a regular expression, not a path. Restricted mode
+([05](05-executors.md)) confines the file tools to the staging directory as
+an independent second layer.
 
 ### I3. At most one writable path, matched exactly
 
 The policy lists the exact absolute paths that may be written: zero for
 research and critic sessions, one for all the others. Write and Edit calls to
-any other path are denied, even inside the staging directory. After a
+any other path are denied, even inside the staging directory. The match is on
+the exact resolved path, so case and Unicode-normalisation variants are
+denied. After a
 session, any file in the staging directory other than the expected output
 produces a warning and is never copied back.
 
@@ -65,9 +82,15 @@ This breaks the "lethal trifecta" of private data, untrusted content and an
 outbound channel in the same session.
 
 - **Research sessions** see only `public_context` and the research
-  questions. The questions are rendered from a template context that
-  contains nothing else ([03](03-playbooks.md#templates)). Their staging
-  directory is empty, and they write nothing to disk.
+  questions. They run in an empty directory under the OS temporary
+  directory, because the CLI tells the model its working directory, and a
+  project path can name the client. The settings file also turns off the
+  git status and memory blocks that the CLI would otherwise inject
+  ([05](05-executors.md)). The questions are rendered from a template context that
+  contains nothing else ([03](03-playbooks.md#templates)). They are rendered
+  in a fresh template environment with no cache, so nothing a task body
+  rendered earlier can reach them. Their staging directory is empty, and they
+  write nothing to disk.
 - **Every other session** has no WebSearch or WebFetch.
 - `spadework check --show-public` shows exactly what research sessions will see.
 
@@ -90,7 +113,9 @@ Templates are rendered with Jinja2's `SandboxedEnvironment` and
 `StrictUndefined`, with no filesystem loader beyond the playbook's own
 directory. Playbooks cannot declare hooks, tools, executors or code
 validators ([ADR 0004](../decisions/0004-playbooks-are-data.md)).
-Playbook paths must stay inside the playbook directory.
+Playbook paths must stay inside the playbook directory, and the project
+folder must not be inside the playbook folder, so a template cannot include
+`brief.md`.
 
 ### I9. Verification fetches cannot reach private networks
 
@@ -104,8 +129,8 @@ at 2 MB and 10 s, and it identifies itself as `spadework/<version>`.
 
 The only exceptions are the user's Claude Code installation, which manages
 its own files under `~/.claude` (kept to a minimum by
-`--no-session-persistence`), and the OS temporary directory, if staging is
-ever moved there.
+`--no-session-persistence`), and the OS temporary directory, where research
+sessions are staged in `spadework-*` folders that are removed afterwards.
 
 ### I11. Denials are visible
 
@@ -139,7 +164,12 @@ flowchart LR
 
 It is configured as a `PreToolUse` hook with matcher `*` in each session's
 generated settings file:
-`python -m spadework.sandbox.guard --policy <abs path in .spadework/control/>`.
+`<python> -I -m spadework.sandbox.guard --policy <abs path in .spadework/control/> --event pre-tool-use`.
+`-I` stops a staged file or `PYTHONPATH` from shadowing a module the guard
+imports. The same command with `--event session-start` runs as a
+`SessionStart` hook: it checks that the policy loads and that the session's
+working directory is the policy's, prints nothing, and lets the executor
+confirm that the guard is live ([05](05-executors.md)).
 
 **Policy file**, written by the engine and unreachable by the session:
 
@@ -147,8 +177,8 @@ generated settings file:
 {
   "schema_version": 1,
   "session_id": "003-references-research",
-  "workdir": "/…/.spadework/sessions/003",
-  "allowed_tools": ["WebSearch", "WebFetch"],
+  "workdir": "/tmp/spadework-k2j9x1",
+  "allowed_tools": ["WebSearch", "WebFetch", "StructuredOutput"],
   "writable": [],
   "deadline_epoch": 1790550000,
   "caps": { "WebSearch": 6, "WebFetch": 8, "total": 80 },
@@ -158,10 +188,34 @@ generated settings file:
 ```
 
 **Checks, in order:** parse the payload → load the policy → deadline → tool
-is on the allowlist → per-tool arguments (paths, patterns, and for
-`WebFetch`, an `http(s)` URL whose host is not a literal loopback or private
-address) → caps (counters incremented under a file lock) → allow. The first
-failure denies with exit code `2` and a one-line reason that the model sees.
+is on the allowlist → per-tool argument checks that need no network → caps
+(counters incremented under a file lock) → for `WebFetch`, the DNS check →
+allow. A call over its cap therefore never causes a DNS lookup, and a
+`WebFetch` that the DNS check then denies still counts against
+`max_fetches`.
+
+- Per-tool arguments are the path and pattern rules of I2 and I3, and for
+  `WebFetch`: an `http(s)` URL with no credentials, whose host is public.
+  An IP literal is read the way a browser's URL parser reads it (`127.1`, hex,
+  octal and decimal forms included). A name is resolved, and every address
+  it resolves to must be public, including addresses embedded in
+  IPv4-mapped and NAT64 forms. An address is public only if it lies outside
+  every block in the IANA special-purpose address registries and outside
+  multicast; for IPv6, only `2000::/3` can be public. This is an explicit
+  list, so the answer is the same on every supported Python version.
+- `StructuredOutput`, the tool that returns the session's result, is on every
+  allowlist and is never counted or capped, so a session that has used up its
+  tool calls can still report.
+- The guard answers with a JSON `permissionDecision` of `allow` or `deny`
+  and exit code `0`. A denial carries a one-line reason that the model sees.
+  If the payload or policy is unusable, or the guard hits an internal error,
+  it exits `2` with a generic `internal error` on stderr, which blocks the
+  call. Messages never contain control-plane paths or exception details.
+- On success, `--event session-start` writes `<session_id>.alive`, holding
+  the session id, next to the policy. The executor checks it at `init`.
+- Every denial is appended to the session's denials log as
+  `{ts, tool_name, reason, target}`. `target` drops a URL's credentials,
+  query and fragment.
 
 The guard is plain standard-library Python. It imports nothing outside the
 standard library, starts fast, and is easy to audit.
@@ -174,6 +228,11 @@ standard library, starts fast, and is easy to audit.
 | The user puts confidential information in `public_context` | Required field, `check --show-public`, and documentation | User's responsibility |
 | Search queries reveal terms taken from `public_context` to the search provider | Inherent to web research | Accepted |
 | A Claude Code bug weakens `--tools` or the hook | Several layers; `doctor --canary` checks live that a read outside the workdir and a write to a second file are both denied | Monitored |
+| If the guard is not running, the CLI still allows Read, Glob and Grep inside the working directory | Restricted mode confines them; the executor's liveness checks kill a session whose guard did not start or did not answer | Reduced |
+| DNS rebinding: a name resolves to a public address for the guard and to a private one when the CLI fetches it | Closing it needs the fetcher to pin the address (a future executor with its own web tools) or OS-level egress rules | Accepted for v0 |
+| A research session leaks what it knows through search queries or URLs to public hosts | It knows only `public_context` (I5) | Accepted |
+| Managed (enterprise) Claude Code settings could disable hooks | `dontAsk` mode denies every call the guard didn't approve; the liveness checks fail the session | Reduced |
+| A new CLI version adds tool arguments the guard doesn't know, and calls start being denied | The guard fails closed; `doctor --canary` and the minimum tested version catch it | Accepted |
 | Local logs contain the brief and inputs | Kept in `.spadework/`, which `init` gitignores | Accepted |
 
 ## Reporting vulnerabilities
