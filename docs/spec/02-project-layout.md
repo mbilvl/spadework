@@ -129,6 +129,10 @@ task becomes **pinned**:
 - Critic findings against it are reported in the summary for the human to act on.
 - `spadework run --force --only TASK` regenerates it after a warning.
 
+A deleted file in `out/` is not an edit; the next run renders it again. If
+the engine has no record of a file it is about to overwrite (for example
+after `.spadework/` was removed), it warns rather than overwriting silently.
+
 ## `.spadework/`
 
 Engine-only. The layout above is informational, not a public contract,

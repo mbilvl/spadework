@@ -60,15 +60,21 @@ Both are SHA-256 hashes over canonical JSON.
 
 Dependencies contribute their *keys*, not their output text. Fixes applied
 during review change output text without changing any key, so review can
-never cause redrafts. A change upstream still propagates downstream.
+never cause redrafts. A change upstream still propagates downstream. A human
+edit to a dependency's file in `out/` does not make its dependents stale
+either.
+
+A task records the draft key of each dependency output it was drafted from.
+When `--only` uses a dependency's older output, the dependent stays stale
+until that dependency is redrafted.
 
 | State | Meaning |
 |---|---|
 | `pending` | Has never run |
 | `fresh` | The key matches the last successful draft |
-| `stale` | The key changed. The reason is recorded, for example *brief changed*, *inputs/x.md added*, *dependency ia is stale*, *playbook 0.1.0 → 0.2.0*. |
-| `failed` | The last attempt errored |
-| `invalid` | An output exists, but validators still fail after repair |
+| `stale` | The key changed. The reason is recorded: *brief changed*, *inputs/x.md added* (or *changed*, *removed*), *task file changed*, *public context changed*, *research questions changed*, *playbook 0.1.0 → 0.2.0*, *draft model sonnet → opus*, *research model …*, *engine prompts changed*, *dependency ia is stale* (or *changed*), or *--force*. |
+| `failed` | The last attempt errored. The next run retries it. |
+| `invalid` | An output exists, but validators still fail after repair. It is not redrafted until its key changes or `--force` is used; its validator failures go to the review loop as findings. |
 | `pinned` | A human edited the output ([02](02-project-layout.md#human-edits)) |
 
 Research results are reused while the research key matches, even when the
@@ -142,11 +148,16 @@ stops and schema failures after one retry are not retried.
 
 - `state.json` is written atomically, to a temporary file followed by
   `os.replace`, after every session.
-- Progress through the review rounds is persisted. If a run is interrupted
-  and restarted, it resumes the current round and does not redraft fresh tasks.
+- Progress through the review rounds (the round, the critic's result, and
+  the fixes done) is persisted from the first output a run changes until the
+  pack is rendered. If a run is interrupted and restarted, it resumes the
+  review, summary and render, even when nothing is stale, and does not
+  redraft fresh tasks.
 - **Lock.** `.spadework/lock` is created with `O_EXCL` and holds the pid,
   the host and the start time. A lock whose pid is dead on the same host is
-  reclaimed with a warning. Otherwise the CLI exits `7`.
+  reclaimed with a warning. Otherwise the CLI exits `7`. A lock file that
+  cannot be read is never reclaimed; the hint says to delete it if no run is
+  active.
 
 ## Run manifest
 
@@ -184,3 +195,8 @@ random hex characters, for example `20260927T210411Z-3f9a`.
 
 `outcome` is one of `complete`, `partial`, `budget`, `time`, `rate_limited`,
 `interrupted`, or `error`, and it matches the exit code ([01](01-cli.md#exit-codes)).
+`ended_at` and `outcome` are null until the run ends. The run also records
+`error` and `rate_limit_reset` when they apply, and each session records its
+`error`. A failing validator entry carries its `message`, and
+`"repairable": false` when a repair session cannot fix it. `usage` also
+includes `cache_creation_tokens`.
