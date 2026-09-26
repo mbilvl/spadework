@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spadework"
+dynamic = ["version"]
+description = "Evidence-first research for projects in discovery."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "The spadework Authors" }]
+requires-python = ">=3.11"
+keywords = ["research", "discovery", "claude", "cli"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "typer>=0.27",
+]
+
+[project.scripts]
+spadework = "spadework.cli:app"
+
+[tool.hatch.version]
+path = "src/spadework/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spadework"]

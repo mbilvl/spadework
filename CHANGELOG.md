@@ -11,3 +11,5 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   records 0001–0007, and the roadmap.
 - The Apache-2.0 license, a contributing guide, a code of conduct, and a
   security policy.
+- The `spadework` command. So far it prints its version with
+  `spadework --version`.
