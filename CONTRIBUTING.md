@@ -20,10 +20,6 @@ approach before you write code.
 
 ## Development setup
 
-> The Python package is being set up in milestone M0. Until it lands, this
-> section and the next describe the target setup, and contributions are to
-> the docs.
-
 You need Python 3.11 or later, [uv](https://docs.astral.sh/uv/), and git.
 
 You don't need Claude Code or an Anthropic account to develop spadework.
