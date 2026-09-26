@@ -76,6 +76,18 @@ the validation error. If it fails again, the session is `failed`.
 IDs are local to a task. In `pack.json`, they are qualified with the task id,
 for example `stack:D1`.
 
+| Field | Values |
+|---|---|
+| `summary` | One line, at most 300 characters |
+| `decisions[].reversibility` | `easy` \| `moderate` \| `hard` |
+| `open_questions[].answer_format` | `yes_no` \| `choice` \| `number` \| `date` \| `document` \| `text` |
+| `risks[].likelihood`, `risks[].impact` | `low` \| `medium` \| `high` |
+
+Every field in every result is required, even when it is empty (`[]` or
+`""`), and no other fields are allowed: the schema passed to the executor is
+strict and self-contained, and the engine validates the result again with
+the same model. IDs are unique within a result.
+
 ### `FixResult`
 
 `DraftResult` plus:
@@ -98,7 +110,8 @@ for example `stack:D1`.
 ```
 
 `kind` is one of `fabrication`, `contradiction`, `filler`, `specificity`,
-`priority`, `missing`, `length`, or `other`. Findings are capped at the
+`priority`, `missing`, `length`, or `other`, and `severity` is `low`,
+`medium` or `high`. `biggest_gap` is one line and may be empty. Findings are capped at the
 playbook's `max_findings`. Every instruction must be something a fixer can
 carry out with its own document and the brief, without inventing facts.
 
@@ -109,7 +122,7 @@ carry out with its own document and the brief, without inventing facts.
 ```
 
 This is the consolidated list of at most 10 open questions, each traced back
-to the task questions it merges.
+to the task questions it merges. `status` is `ok` or `partial`.
 
 ## Citations
 
