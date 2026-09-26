@@ -1,0 +1,13 @@
+schema_version = 1
+name = "quickstart"
+version = "0.1.0"
+description = "Try spadework in minutes: five comparable products or companies, then the ten questions to ask the client next. Two small tasks, cheap to run."
+requires_brief = []
+
+[defaults]
+tier = "draft"
+budget_usd = 0.30
+max_lines = 100
+
+[review]
+max_findings = 5

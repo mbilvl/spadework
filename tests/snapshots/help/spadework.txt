@@ -1,0 +1,22 @@
+Usage: spadework [OPTIONS] COMMAND [ARGS]...
+
+  Evidence-first research for projects in discovery.
+
+Options:
+  --version           Print the version and exit.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+Commands:
+  init       Create a project from a playbook.
+  check      Validate the project and print the plan.
+  playbooks  List or show the built-in and local playbooks.
+
+  Examples:
+
+    spadework init acme-fabrication
+    spadework check -C acme-fabrication
+    spadework playbooks list

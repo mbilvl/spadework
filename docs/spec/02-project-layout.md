@@ -90,20 +90,22 @@ public_context: >
 | any other key | no | Available to templates as `brief.extra.<key>` |
 
 A playbook can declare more required fields (`requires_brief`). `check`
-reports any that are missing.
+reports any that are missing. A field counts as missing when it is absent,
+null, blank, or an empty list.
 
 ## `inputs/`
 
 Material that arrives after the brief: call notes, client answers, emails,
 and links the client sent.
 
-- v0 accepts `.md` and `.txt`. PDF and other document types are **[later]**.
+- v0 accepts UTF-8 `.md` and `.txt` files, in subfolders too. Hidden files
+  are ignored. PDF and other document types are **[later]**.
 - The recommended naming is `YYYY-MM-DD-topic.md`, so the history reads in order.
 - Each file is hashed. Adding, editing or removing a file makes the tasks
   whose `inputs` globs match it stale ([04](04-engine.md)).
 - Inputs are staged, read-only, into draft, fix, critic and summary sessions.
   They are **never** given to research sessions.
-- Soft limit: 500 KB in total. `check` warns above it.
+- Soft limit: 500 KB (500,000 bytes) in total. `check` warns above it.
 
 ## `out/` — the pack
 

@@ -1,0 +1,27 @@
+Usage: spadework init [OPTIONS] [DIR]
+
+  Create a project from a playbook.
+
+  Writes spadework.toml, brief.md (copied from the playbook's brief template),
+  an empty inputs/ folder, and a .gitignore for engine state. DIR must be empty
+  or new, unless you pass --force.
+
+Arguments:
+  [DIR]  Folder to create the project in. Default: the current folder.
+
+Options:
+  --playbook NAME     A built-in playbook, or the path to a playbook folder.
+                      [default: discovery-website]
+  --force             Allow a folder that is not empty. Replaces its
+                      spadework.toml and brief.md.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework init acme-fabrication
+    spadework init acme-fabrication --playbook quickstart
+    spadework init acme-fabrication --playbook ./playbooks/mine

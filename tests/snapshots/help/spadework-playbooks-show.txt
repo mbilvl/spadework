@@ -1,0 +1,18 @@
+Usage: spadework playbooks show [OPTIONS] {NAME}
+
+  Show a playbook: what it needs from the brief, and its tasks in order.
+
+Arguments:
+  NAME  A built-in playbook, or the path to a playbook folder.  [required]
+
+Options:
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework playbooks show discovery-website
+    spadework playbooks show ./playbooks/mine

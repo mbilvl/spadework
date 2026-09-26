@@ -1,0 +1,22 @@
+Usage: spadework check [OPTIONS]
+
+  Validate the project and print the plan.
+
+  This is the dry run: it loads everything a run would use, renders every
+  template, and estimates the cost. It sends nothing to a model and spends
+  nothing. Exits 3 when the project, brief or playbook is not valid.
+
+Options:
+  --json              Print one JSON document instead of the plan table.
+  --show-public       Print exactly what web-facing research sessions will see.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework check
+    spadework check -C acme-fabrication --show-public
+    spadework check --json | jq '.tasks[] | {id, estimate_usd}'

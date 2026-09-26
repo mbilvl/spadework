@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ExecutorSection": {
+      "additionalProperties": false,
+      "description": "The adapter that runs sessions.",
+      "properties": {
+        "name": {
+          "default": "claude-cli",
+          "description": "'claude-cli' runs `claude -p`. 'fake' is for tests and demos.",
+          "enum": [
+            "claude-cli",
+            "fake"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "bin": {
+          "anyOf": [
+            {
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path to the claude binary. Default: SPADEWORK_CLAUDE_BIN, then PATH.",
+          "title": "Bin"
+        }
+      },
+      "title": "ExecutorSection",
+      "type": "object"
+    },
+    "LimitsSection": {
+      "additionalProperties": false,
+      "description": "Money and time limits. A run never goes past them.",
+      "properties": {
+        "budget_usd": {
+          "default": 6.0,
+          "description": "Spending cap per run, in US dollars.",
+          "exclusiveMinimum": 0,
+          "title": "Budget Usd",
+          "type": "number"
+        },
+        "max_time": {
+          "default": "2h",
+          "description": "Wall-clock cap per run, such as '90m' or '2h'.",
+          "pattern": "^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$",
+          "title": "Max Time",
+          "type": "string"
+        },
+        "rounds": {
+          "default": 2,
+          "description": "Maximum number of review rounds.",
+          "minimum": 0,
+          "title": "Rounds",
+          "type": "integer"
+        },
+        "session_timeout": {
+          "default": "25m",
+          "description": "Wall-clock cap for any one session.",
+          "pattern": "^([0-9]+h([0-9]+m)?([0-9]+s)?|[0-9]+m([0-9]+s)?|[0-9]+s)$",
+          "title": "Session Timeout",
+          "type": "string"
+        }
+      },
+      "title": "LimitsSection",
+      "type": "object"
+    },
+    "ModelsSection": {
+      "additionalProperties": false,
+      "description": "Maps the tiers that tasks declare to models.",
+      "properties": {
+        "draft": {
+          "default": "sonnet",
+          "description": "Model for the draft tier.",
+          "pattern": "\\S",
+          "title": "Draft",
+          "type": "string"
+        },
+        "review": {
+          "default": "opus",
+          "description": "Model for the review tier.",
+          "pattern": "\\S",
+          "title": "Review",
+          "type": "string"
+        }
+      },
+      "title": "ModelsSection",
+      "type": "object"
+    },
+    "ProjectSection": {
+      "additionalProperties": false,
+      "description": "Which project this is and which playbook it runs.",
+      "properties": {
+        "name": {
+          "description": "Slug used in logs and the run manifest.",
+          "pattern": "^(?:[a-z0-9][a-z0-9-]*)$",
+          "title": "Name",
+          "type": "string"
+        },
+        "playbook": {
+          "description": "A built-in playbook name such as 'discovery-website', or a path to a playbook directory relative to the project, such as './playbooks/mine'.",
+          "pattern": "\\S",
+          "title": "Playbook",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "playbook"
+      ],
+      "title": "ProjectSection",
+      "type": "object"
+    },
+    "VerifySection": {
+      "additionalProperties": false,
+      "description": "Source verification.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Verify the quotes of every source.",
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "VerifySection",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The configuration of a spadework project.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "The version of this file format. Always 1.",
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectSection"
+    },
+    "models": {
+      "$ref": "#/$defs/ModelsSection",
+      "default": {
+        "draft": "sonnet",
+        "review": "opus"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/LimitsSection",
+      "default": {
+        "budget_usd": 6.0,
+        "max_time": "2h",
+        "rounds": 2,
+        "session_timeout": "25m"
+      }
+    },
+    "executor": {
+      "$ref": "#/$defs/ExecutorSection",
+      "default": {
+        "name": "claude-cli",
+        "bin": null
+      }
+    },
+    "verify": {
+      "$ref": "#/$defs/VerifySection",
+      "default": {
+        "enabled": true
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "project"
+  ],
+  "title": "spadework.toml",
+  "type": "object"
+}

@@ -38,19 +38,19 @@ operating systems, and a fresh clone contains nothing but public material.
 
 ## M1 — Project model: `init`, `check`, playbooks · M
 
-- [ ] pydantic models for `spadework.toml`, the brief's front matter,
+- [x] pydantic models for `spadework.toml`, the brief's front matter,
       `playbook.toml`, and task front matter. JSON Schemas are exported into
       the package.
-- [ ] Front-matter parsing using YAML `safe_load`. Errors point to a file and line.
-- [ ] Jinja2 `SandboxedEnvironment` rendering with `StrictUndefined`, and a
+- [x] Front-matter parsing using YAML `safe_load`. Errors point to a file and line.
+- [x] Jinja2 `SandboxedEnvironment` rendering with `StrictUndefined`, and a
       separate public-only context for research questions
-- [ ] Playbook loader for built-in and local-path playbooks, and the DAG
+- [x] Playbook loader for built-in and local-path playbooks, and the DAG
       checks (cycles and unknown ids)
-- [ ] Commands: `init`, `check` (the plan table, `--json`, `--show-public`),
+- [x] Commands: `init`, `check` (the plan table, `--json`, `--show-public`),
       `playbooks list/show`
-- [ ] Built-in playbooks: `quickstart`, and `discovery-website` generalised
+- [x] Built-in playbooks: `quickstart`, and `discovery-website` generalised
       from the prototype's nine tasks
-- [ ] `examples/acme-fabrication/`: a fictional brief and inputs
+- [x] `examples/acme-fabrication/`: a fictional brief and inputs
 
 **Done when** `spadework init demo && spadework check -C demo` prints a
 plan; each kind of invalid brief or playbook produces an actionable error

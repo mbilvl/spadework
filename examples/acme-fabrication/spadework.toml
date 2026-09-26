@@ -1,0 +1,21 @@
+schema_version = 1
+
+[project]
+name = "acme-fabrication"
+playbook = "discovery-website"
+
+[models]
+draft = "sonnet"
+review = "opus"
+
+[limits]
+budget_usd = 6.00
+max_time = "2h"
+rounds = 2
+session_timeout = "25m"
+
+[executor]
+name = "claude-cli"
+
+[verify]
+enabled = true

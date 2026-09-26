@@ -55,7 +55,7 @@ Both are SHA-256 hashes over canonical JSON.
 
 | Key | Inputs |
 |---|---|
-| research key | engine prompt version, the rendered research questions, the research model |
+| research key | engine prompt version, `public_context`, the rendered research questions, the research model |
 | draft key | engine prompt version, the playbook name and version, the task file's content, the brief's content, the content of each matching input file, the draft model, the task's research key, **and the draft keys of its dependencies** |
 
 Dependencies contribute their *keys*, not their output text. Fixes applied
@@ -120,7 +120,12 @@ accurate:
 | Total tool calls per session | The guard enforces a cap (default 80) to stop runaway loops |
 
 Default estimates: research $0.75, draft $1.00, repair $0.40, critic $1.00,
-fix $0.50, summary $0.50.
+fix $0.50, summary $0.50. A task's `budget_usd` replaces the default for its
+draft session; its other sessions use the defaults. Estimates are ceilings,
+not predictions: a typical session costs a fraction of its estimate.
+
+Research sessions use the model of the `draft` tier, whatever the task's
+tier: gathering sources doesn't need the stronger model.
 
 **Rate limits.** A `rate_limit_event` with a non-allowed status, or a
 recognised rate-limit error, stops the run cleanly. The manifest records the

@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ResearchSpec": {
+      "additionalProperties": false,
+      "description": "A research session with web access and public context only.",
+      "properties": {
+        "questions": {
+          "description": "A Jinja2 template. It can use only public_context, task and brief.language.",
+          "pattern": "\\S",
+          "title": "Questions",
+          "type": "string"
+        },
+        "max_searches": {
+          "default": 6,
+          "description": "WebSearch cap.",
+          "maximum": 80,
+          "minimum": 0,
+          "title": "Max Searches",
+          "type": "integer"
+        },
+        "max_fetches": {
+          "default": 8,
+          "description": "WebFetch cap.",
+          "maximum": 80,
+          "minimum": 0,
+          "title": "Max Fetches",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "title": "ResearchSpec",
+      "type": "object"
+    },
+    "ValidateSpec": {
+      "additionalProperties": false,
+      "description": "Parameters for the built-in validators, which run after every draft.",
+      "properties": {
+        "max_lines": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most lines allowed.",
+          "title": "Max Lines"
+        },
+        "min_lines": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fewest lines allowed.",
+          "title": "Min Lines"
+        },
+        "starts_with_h1": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The first non-blank line is '# ...'. Default: true.",
+          "title": "Starts With H1"
+        },
+        "required_headings": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Headings that must appear, at any level, in any case.",
+          "title": "Required Headings"
+        },
+        "forbidden_phrases": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Phrases to reject, on top of the engine's own.",
+          "title": "Forbidden Phrases"
+        },
+        "max_open_questions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Counted from the record. Default: 6.",
+          "title": "Max Open Questions"
+        },
+        "citations_resolve": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Every [S#] exists in the task's sources. Default: on for research tasks.",
+          "title": "Citations Resolve"
+        },
+        "min_sources": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fewest sources. Research tasks only.",
+          "title": "Min Sources"
+        }
+      },
+      "title": "ValidateSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The YAML front matter of a playbook task file. The body is a Jinja2 template.",
+  "properties": {
+    "title": {
+      "pattern": "\\S",
+      "title": "Title",
+      "type": "string"
+    },
+    "output": {
+      "description": "File name in out/. Unique within the playbook; not 00-summary.md.",
+      "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*\\.md)$",
+      "title": "Output",
+      "type": "string"
+    },
+    "depends_on": {
+      "description": "Ids of the tasks this one builds on.",
+      "items": {
+        "pattern": "^(?:[a-z][a-z0-9-]*)$",
+        "type": "string"
+      },
+      "title": "Depends On",
+      "type": "array"
+    },
+    "tier": {
+      "anyOf": [
+        {
+          "enum": [
+            "draft",
+            "review"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model tier. Default: the playbook's defaults.tier.",
+      "title": "Tier"
+    },
+    "inputs": {
+      "description": "Globs over inputs/ that are staged for this task.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "budget_usd": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cost estimate and per-session cap. Default: defaults.budget_usd.",
+      "title": "Budget Usd"
+    },
+    "research": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResearchSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "validate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ValidateSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Validator parameters. Keys override the playbook's [defaults] one by one, and null turns an inherited validator off."
+    }
+  },
+  "required": [
+    "title",
+    "output"
+  ],
+  "title": "Task front matter",
+  "type": "object"
+}

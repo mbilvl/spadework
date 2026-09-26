@@ -1,0 +1,15 @@
+Usage: spadework playbooks [OPTIONS] COMMAND [ARGS]...
+
+  List or show the built-in and local playbooks.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  list  List the built-in playbooks and the project's own.
+  show  Show a playbook: what it needs from the brief, and its tasks in order.
+
+  Examples:
+
+    spadework playbooks list
+    spadework playbooks show discovery-website

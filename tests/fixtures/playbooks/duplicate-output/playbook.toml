@@ -1,0 +1,4 @@
+schema_version = 1
+name = "duplicate-output"
+version = "0.1.0"
+description = "An invalid playbook for spadework's own tests."

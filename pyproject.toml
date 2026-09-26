@@ -26,6 +26,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "jinja2>=3.1.6",
+    "pydantic>=2.11",
+    "pyyaml>=6.0.2",
+    "rich>=14",
     "typer>=0.27",
 ]
 
@@ -45,6 +49,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.9",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.ruff]

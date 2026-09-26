@@ -1,0 +1,4 @@
+schema_version = 1
+name = "stash"
+version = "0.1.0"
+description = "A task body that tries to pass brief data to research questions."

@@ -1,0 +1,7 @@
+schema_version = 1
+name = "bad-manifest"
+version = "one"
+description = "An invalid playbook for spadework's own tests."
+
+[defaults]
+budget = 1.0

@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "PlaybookDefaults": {
+      "additionalProperties": false,
+      "description": "Task-level defaults, which tasks can override, and default validators.",
+      "properties": {
+        "max_lines": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most lines allowed.",
+          "title": "Max Lines"
+        },
+        "min_lines": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fewest lines allowed.",
+          "title": "Min Lines"
+        },
+        "starts_with_h1": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The first non-blank line is '# ...'. Default: true.",
+          "title": "Starts With H1"
+        },
+        "required_headings": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Headings that must appear, at any level, in any case.",
+          "title": "Required Headings"
+        },
+        "forbidden_phrases": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "\\S",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Phrases to reject, on top of the engine's own.",
+          "title": "Forbidden Phrases"
+        },
+        "max_open_questions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Counted from the record. Default: 6.",
+          "title": "Max Open Questions"
+        },
+        "citations_resolve": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Every [S#] exists in the task's sources. Default: on for research tasks.",
+          "title": "Citations Resolve"
+        },
+        "min_sources": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fewest sources. Research tasks only.",
+          "title": "Min Sources"
+        },
+        "tier": {
+          "default": "draft",
+          "enum": [
+            "draft",
+            "review"
+          ],
+          "title": "Tier",
+          "type": "string"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Default: $1.00.",
+          "title": "Budget Usd"
+        }
+      },
+      "title": "PlaybookDefaults",
+      "type": "object"
+    },
+    "ReviewSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "max_findings": {
+          "default": 12,
+          "description": "Critic findings per round.",
+          "exclusiveMinimum": 0,
+          "title": "Max Findings",
+          "type": "integer"
+        }
+      },
+      "title": "ReviewSettings",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The manifest of a spadework playbook.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "The version of this file format. Always 1.",
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "name": {
+      "pattern": "^(?:[a-z0-9][a-z0-9-]*)$",
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "description": "Part of every task fingerprint.",
+      "pattern": "^(?:[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)$",
+      "title": "Version",
+      "type": "string"
+    },
+    "description": {
+      "pattern": "\\S",
+      "title": "Description",
+      "type": "string"
+    },
+    "requires_brief": {
+      "description": "Brief fields this playbook needs, on top of title and reader.",
+      "items": {
+        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_-]*)$",
+        "type": "string"
+      },
+      "title": "Requires Brief",
+      "type": "array"
+    },
+    "defaults": {
+      "$ref": "#/$defs/PlaybookDefaults",
+      "default": {
+        "max_lines": null,
+        "min_lines": null,
+        "starts_with_h1": null,
+        "required_headings": null,
+        "forbidden_phrases": null,
+        "max_open_questions": null,
+        "citations_resolve": null,
+        "min_sources": null,
+        "tier": "draft",
+        "budget_usd": null
+      }
+    },
+    "review": {
+      "$ref": "#/$defs/ReviewSettings",
+      "default": {
+        "max_findings": 12
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "name",
+    "version",
+    "description"
+  ],
+  "title": "playbook.toml",
+  "type": "object"
+}

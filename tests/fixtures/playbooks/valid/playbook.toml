@@ -1,0 +1,13 @@
+schema_version = 1
+name = "fixture"
+version = "1.0.0"
+description = "A small playbook for spadework's own tests."
+requires_brief = ["priorities"]
+
+[defaults]
+tier = "draft"
+budget_usd = 0.50
+max_lines = 120
+
+[review]
+max_findings = 4

@@ -29,8 +29,13 @@ shell alias.
 
 ### `init`
 
-Creates `DIR` (default: the current directory, which must be empty or
-`--force` is required) containing:
+Creates `DIR` (default: the current directory) from a playbook. `--playbook`
+defaults to `discovery-website` and also accepts a path to a playbook folder,
+which is written to `spadework.toml` relative to the project. `DIR` must be
+new or empty; a folder holding only `.git` counts as empty. A folder that
+isn't empty is a usage error (exit `2`) unless `--force` is given. `--force`
+replaces `spadework.toml` and `brief.md` with a warning and never touches
+`inputs/`. The project contains:
 
 - `spadework.toml`
 - `brief.md`, copied from the playbook's brief template with its required
@@ -54,11 +59,21 @@ budget    $6.00 · 2h · 2 review rounds
   audience     stale   inputs/2026-09-30-client-call.md added  $0.40
   references   stale   depends on: audience                    $1.10
   ...
-estimated spend for stale work: $3.20 (cap $6.00)
+estimated spend for pending and stale work: up to $3.20 (cap $6.00)
 ```
 
-- `--show-public` prints exactly what web-facing research sessions will see.
-  See [07 — Security](07-security.md).
+`est.` is the task's `budget_usd`, plus the research estimate when the task
+has research ([04](04-engine.md#budgets-and-limits)). It is a ceiling, not a
+prediction, so the total can exceed the cap without a problem: a run that
+reaches the cap stops and can be resumed. `check` warns only when a single
+task could never start within the budget.
+
+- `--show-public` prints everything from the project that web-facing
+  research sessions will see: `public_context` and each research task's
+  rendered questions. See [07 — Security](07-security.md). With `--json`, it
+  adds a `public` key to the document.
+- `check` warns when the playbook has research tasks and `public_context` is
+  empty.
 - Exits `3` on any validation error. Errors point to a file, and to a line
   where possible, and say how to fix it.
 
@@ -117,13 +132,18 @@ timestamped plain lines, one per event.
 | `-q, --quiet` / `-v, --verbose` | Less or more output. `-v` shows tracebacks. |
 | `--no-color` | Disable colour. The `NO_COLOR` environment variable is also honoured. |
 
+Global options may be given before or after the command name.
+
 ## Output conventions
 
 - Results go to **stdout**: tables, JSON, and paths. Progress, logs and
   warnings go to **stderr**.
 - `--json` makes `check`, `status` and `verify` print a single JSON document.
   With `run`, it prints NDJSON events. JSON output is a public contract, and
-  every object has a `schema_version`.
+  every object has a `schema_version`. On failure the document is
+  `{"schema_version": 1, "ok": false, "error": {"message", "hint",
+  "exit_code", "problems": [{"path", "line", "message"}]}}`, and the
+  human-readable error still goes to stderr.
 - An error is one line that says what happened, followed by one line on what
   to do about it. No tracebacks unless `-v` or `SPADEWORK_DEBUG=1`.
 - Destructive commands (`clean`) ask for confirmation on a TTY. Without a TTY

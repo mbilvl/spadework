@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "The YAML front matter of a project's brief. Other keys are allowed and reach templates as brief.extra.<key>.",
+  "properties": {
+    "title": {
+      "description": "The pack title, also used in logs.",
+      "pattern": "\\S",
+      "title": "Title",
+      "type": "string"
+    },
+    "reader": {
+      "description": "Who every document is written for. Injected into the house rules.",
+      "pattern": "\\S",
+      "title": "Reader",
+      "type": "string"
+    },
+    "public_context": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The only brief content that web-facing research sessions see. Required when the playbook has research tasks. It may be ''.",
+      "title": "Public Context"
+    },
+    "priorities": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The critic checks the pack against these.",
+      "title": "Priorities"
+    },
+    "language": {
+      "default": "en",
+      "description": "The language of the pack.",
+      "pattern": "^(?:[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*)$",
+      "title": "Language",
+      "type": "string"
+    },
+    "currencies": {
+      "description": "Money figures are given in each of these.",
+      "items": {
+        "pattern": "^(?:[A-Z]{3})$",
+        "type": "string"
+      },
+      "title": "Currencies",
+      "type": "array"
+    }
+  },
+  "required": [
+    "title",
+    "reader"
+  ],
+  "title": "brief.md front matter",
+  "type": "object"
+}

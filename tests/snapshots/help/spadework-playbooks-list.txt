@@ -1,0 +1,18 @@
+Usage: spadework playbooks list [OPTIONS]
+
+  List the built-in playbooks and the project's own.
+
+  The project's playbook is listed too when it is a folder rather than a built-
+  in name.
+
+Options:
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework playbooks list
+    spadework -C acme-fabrication playbooks list

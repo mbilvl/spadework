@@ -1,0 +1,13 @@
+schema_version = 1
+name = "discovery-website"
+version = "0.1.0"
+description = "Discovery pack for a new marketing or catalogue website: scope, audience, references, information architecture, design, stack, content, search and a roadmap."
+requires_brief = ["priorities"]
+
+[defaults]
+tier = "draft"
+budget_usd = 1.00
+max_lines = 250
+
+[review]
+max_findings = 12
