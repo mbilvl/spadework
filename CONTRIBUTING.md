@@ -50,7 +50,8 @@ To try the CLI without calling a model, set `SPADEWORK_EXECUTOR=fake`.
 | Everything pre-commit runs | `uv run pre-commit run --all-files` |
 
 CI runs lint, type checks and tests on Ubuntu and macOS, with Python 3.11
-and 3.14.
+and 3.14. It also runs every pre-commit hook, and checks that
+`uvx --from . spadework --version` works.
 
 - **Tests never call a model.** Use the fake executor: its scripted
   sessions, its recorded `stream-json` fixtures, and its injectable
@@ -130,8 +131,8 @@ This adds a line built from your git `user.name` and `user.email`:
 Signed-off-by: Jane Doe <jane@example.com>
 ```
 
-Every commit in a pull request must be signed off. To add a sign-off you
-forgot:
+Every commit in a pull request must be signed off, except Dependabot's.
+To add a sign-off you forgot:
 
 ```bash
 git commit --amend -s --no-edit     # the last commit

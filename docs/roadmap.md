@@ -16,20 +16,20 @@ M0 foundations ─▶ M1 project model ─▶ M2 sandbox + executor ─▶ M3 pi
 
 ## M0 — Repository foundations · S
 
-- [ ] `LICENSE` (Apache-2.0) and `NOTICE`
-- [ ] `README.md`: what it is, its status, and links to the spec
-- [ ] `CONTRIBUTING.md`: dev setup with uv, running the tests, the "spec in
+- [x] `LICENSE` (Apache-2.0) and `NOTICE`
+- [x] `README.md`: what it is, its status, and links to the spec
+- [x] `CONTRIBUTING.md`: dev setup with uv, running the tests, the "spec in
       the same PR" rule, DCO sign-off (`git commit -s`), and the no-client-data rule
-- [ ] `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (private
+- [x] `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (private
       reporting through GitHub Security Advisories), `CHANGELOG.md` (Keep a Changelog)
-- [ ] `pyproject.toml` (hatchling), `uv.lock`, `src/spadework/` layout,
+- [x] `pyproject.toml` (hatchling), `uv.lock`, `src/spadework/` layout,
       `spadework --version`, and a Typer app skeleton
-- [ ] ruff for lint and format, mypy (strict on `src/`), pytest with coverage, pre-commit
-- [ ] CI with GitHub Actions: {ubuntu, macos} × {3.11, 3.14} running lint,
-      type checks and tests. Dependabot for Actions and pip.
-- [ ] Issue templates (bug, feature, playbook idea) and a PR template with a
+- [x] ruff for lint and format, mypy (strict on `src/`), pytest with coverage, pre-commit
+- [x] CI with GitHub Actions: {ubuntu, macos} × {3.11, 3.14} running lint,
+      type checks and tests. Dependabot for Actions and uv.
+- [x] Issue templates (bug, feature, playbook idea) and a PR template with a
       "spec updated?" checkbox
-- [ ] `AGENTS.md`: a public, contributor-facing guide for people who
+- [x] `AGENTS.md`: a public, contributor-facing guide for people who
       contribute with AI coding assistants (commands, conventions, what never
       to commit)
 

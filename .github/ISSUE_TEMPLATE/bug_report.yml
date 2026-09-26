@@ -1,0 +1,82 @@
+name: Bug report
+description: spadework did something wrong, or failed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Don't paste a real brief, real inputs, or unredacted logs from `.spadework/`.**
+        > The logs contain both. Reproduce the problem with fictional data if you can,
+        > and redact anything you attach. This issue is public.
+
+        **Found a security problem?** Don't open an issue. Report it privately through
+        GitHub Security Advisories, as described in `SECURITY.md`.
+
+  - type: input
+    id: version
+    attributes:
+      label: spadework version
+      description: The output of `spadework --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. macOS 26.0, Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: The output of `python --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: claude-code
+    attributes:
+      label: Claude Code version
+      description: If the problem involves a real run, the output of `claude --version`.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: The full command, including its options.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the error message or output. Redact anything from a real project.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Steps to reproduce, a fictional brief that triggers the bug, or redacted logs.
+
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Public material only
+      options:
+        - label: This report contains no real brief, inputs, client data or secrets.
+          required: true

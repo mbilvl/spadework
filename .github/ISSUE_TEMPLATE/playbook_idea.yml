@@ -1,0 +1,55 @@
+name: Playbook idea
+description: Propose a new research playbook.
+labels: [playbook]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A playbook is a reusable research recipe. **Playbooks are data only:** TOML,
+        Markdown and sandboxed Jinja2 templates. A playbook cannot declare tools,
+        hooks, executors or Python code (ADR 0004 in `docs/decisions/`). The format
+        is described in `docs/spec/03-playbooks.md`.
+
+        Describe the research here first, before you build it. Use fictional
+        examples, never material from a real project.
+
+  - type: textarea
+    id: research
+    attributes:
+      label: What research would it do?
+      description: The questions it answers, and what the finished pack gives you.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: The tasks it would run, the document each one produces, and which tasks depend on which.
+      placeholder: |
+        - competitors: who else serves this market, and what they charge (needs web research)
+        - scope: what is in and out of scope (depends on competitors)
+    validations:
+      required: true
+
+  - type: textarea
+    id: audience
+    attributes:
+      label: Who is it for?
+      description: The kind of project it suits, who would run it, and who reads the pack.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: What the brief would need to contain, or an existing hand-made pack it's based on (described, not attached).
+
+  - type: checkboxes
+    id: data-only
+    attributes:
+      label: Data only
+      options:
+        - label: The playbook needs only TOML, Markdown and Jinja2 templates, and no code.
+          required: true

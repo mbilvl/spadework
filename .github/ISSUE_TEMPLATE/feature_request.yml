@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new feature or a change to the design.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the roadmap in `docs/roadmap.md` first, since your idea may already be planned.
+        For anything larger than a small change, agree the approach here before you write code.
+        Use fictional examples, never material from a real project.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should spadework do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve the problem, including workarounds.
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: Affected spec
+      description: Which parts of `docs/spec/`, if any, would change?
