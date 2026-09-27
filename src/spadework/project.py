@@ -71,12 +71,35 @@ def load_project(root: Path) -> Project:
             ],
         )
     playbook = load_playbook(ref)
+    _check_brief_link(root)
     brief = load_brief(root / BRIEF_FILE, playbook)
     inputs = tuple(scan_inputs(root / INPUTS_DIR, root))
     check_templates(config.project.name, brief, playbook, inputs)
     return Project(
         root, config, playbook, brief, inputs, tuple(_warnings(brief, playbook, inputs))
     )
+
+
+def _check_brief_link(root: Path) -> None:
+    """A brief.md that is a link must stay inside the project.
+
+    Sessions are given copies of project files only, so a brief kept
+    elsewhere could not be staged.
+    """
+    path = root / BRIEF_FILE
+    if not path.is_symlink():
+        return
+    try:
+        target = path.resolve(strict=True)
+    except (OSError, RuntimeError):  # RuntimeError: a link loop before 3.13
+        return  # load_brief reports the missing file
+    if not target.is_relative_to(root.resolve()):
+        raise InvalidError(
+            f"{BRIEF_FILE} is a link to a file outside the project",
+            f"Copy the brief into the project folder as {BRIEF_FILE} rather than "
+            "linking to it.",
+            problems=[Problem("is a link to a file outside the project", BRIEF_FILE)],
+        )
 
 
 def _playbook_line(config_path: Path) -> int | None:

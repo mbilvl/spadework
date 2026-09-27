@@ -1,0 +1,20 @@
+Usage: spadework status [OPTIONS]
+
+  Show task states and the last run.
+
+  Shows each task's state and why, worked out as `spadework check` works it out;
+  the last run's outcome, spend, duration and sessions; and whether a run is
+  active. It sends nothing to a model and spends nothing.
+
+Options:
+  --json              Print one JSON document instead of the table.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework status
+    spadework status -C acme-fabrication --json | jq .last_run

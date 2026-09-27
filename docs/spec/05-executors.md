@@ -137,8 +137,9 @@ using the interpreter spadework itself runs under.
 | Permission mode | With `acceptEdits` plus `--allowedTools`, a guard that crashes, times out or cannot start lets the call through. With `dontAsk` and no pre-approved tools, a call runs only when the guard answers *allow*, so the guard fails closed. The exception is Read, Glob and Grep inside the working directory, which the CLI allows by itself; restricted mode confines them. `--allowedTools` is never passed. |
 | Loading no settings | `--setting-sources ""`, with the empty string as its own argument (`none` is rejected). Hooks from `--settings` still run. Without it, the user's and the project's hooks, MCP servers (started even when `--tools` excludes them), `CLAUDE.md` files, output style and enabled plugins all reach the session. |
 | Remaining leaks | Auto-memory and the git status block (branch, git user name, changed files, recent commit subjects) are injected even under `--setting-sources ""` and `--restricted`. The settings file turns both off, and so do the environment variables below, which also cover a settings file the CLI silently ignored. `--disable-slash-commands` removes the bundled skills. |
-| Structured result | `--json-schema` adds a `StructuredOutput` tool, which the guard must allow. The result arrives in the final `result` event as `structured_output`. A session is `ok` only if `subtype` is `success`, `is_error` is false, and `structured_output` is present. Output that fails the schema is retried by the CLI up to 5 times, then ends with `error_max_structured_output_retries`. A model that never calls the tool ends with `success` and no `structured_output`, which spadework treats as a schema failure ([06](06-records.md)). |
+| Structured result | `--json-schema` adds a `StructuredOutput` tool, which the guard must allow. The result arrives in the final `result` event as `structured_output`. A session is `ok` only if `subtype` is `success`, `is_error` is false, and `structured_output` is present. Output that fails the schema is retried by the CLI, which gives the model 5 attempts in all, then ends with `error_max_structured_output_retries`. A model that never calls the tool ends with `success` and no `structured_output`, which spadework treats as a schema failure ([06](06-records.md)). |
 | Tool names | `Read`, `Glob`, `Grep`, `Write`, `Edit`, `WebSearch`, `WebFetch`, plus `StructuredOutput`. `--tools` sets the exact set of built-in tools, but silently drops names it doesn't know, so the adapter compares the tools listed in the `init` event with the expected set and fails the session if they differ. |
+| Before the hook | Claude Code itself refuses some calls before any `PreToolUse` hook runs: a tool not in `--tools`, and a Write or Edit to an existing file the session hasn't read. Those are blocked but are not guard denials. It also turns a relative `file_path` into an absolute one before the hook sees it. Where both apply, the guard runs before restricted mode's own check. |
 | Hook timeout | The default is 600 s. The guard takes a few milliseconds, including its file-locked counters, so the timeout needs no change. A hook that times out does not block the call, which is why failing closed relies on `dontAsk`. |
 | Never used | `--bare` and `--safe-mode` skip every hook, including the guard. `bypassPermissions`, `--dangerously-skip-permissions`, `--allowedTools`, `--add-dir`, `--mcp-config`, `--plugin-*`, `--agents` and `--fallback-model` are never passed. |
 
@@ -176,7 +177,11 @@ that ends without a `result` event is an `error`. Matching on error text is
 only a fallback for detecting rate limits. A session that ends with `success`
 and a structured result is `ok` even if a `rejected` rate-limit event arrived
 during it; `rate_limit_reset` is still set, so the engine stops before the
-next session. API errors with a 5xx status are `transient`.
+next session. API errors with a 5xx status are `transient`. With an API
+key, Claude Code 2.1.278 reports a rejected rate limit only as
+`api_error_status: 429`, with no `rate_limit_event` and no reset time, and it
+does not retry; the result is `rate_limited` with `rate_limit_reset` unset.
+The `rate_limit_event` path is expected with subscription logins.
 
 **Process control.** The CLI starts in its own process group
 (`start_new_session=True`). A timeout or interrupt sends SIGTERM to the

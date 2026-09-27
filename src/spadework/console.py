@@ -6,8 +6,8 @@ import json
 import os
 import sys
 import traceback
-from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from functools import cache, cached_property
+from typing import IO, TYPE_CHECKING, Any
 
 from spadework.errors import SpadeworkError
 
@@ -17,6 +17,39 @@ if TYPE_CHECKING:
 
 def debug_enabled() -> bool:
     return os.environ.get("SPADEWORK_DEBUG", "") not in ("", "0")
+
+
+def silence(stream: IO[str]) -> None:
+    """Send whatever else is written to ``stream`` nowhere.
+
+    Called when its reader has gone away, as with ``spadework run | head``:
+    the command goes on and ends as it would have, and Python's own flush at
+    exit no longer fails on the closed pipe.
+    """
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return  # not a real file, as in tests
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, fd)
+    finally:
+        os.close(devnull)
+
+
+@cache
+def _console_class() -> type[Console]:
+    from rich.console import Console
+
+    class QuietOnBrokenPipe(Console):
+        def on_broken_pipe(self) -> None:
+            # Rich's default raises SystemExit(1), which would end a run
+            # half-way and give it an exit code that its manifest disagrees
+            # with. Stop writing instead, and let the command finish.
+            self.quiet = True
+            silence(self.file)
+
+    return QuietOnBrokenPipe
 
 
 class Ui:
@@ -34,9 +67,7 @@ class Ui:
         return self.verbose or debug_enabled()
 
     def _console(self, *, stderr: bool) -> Console:
-        from rich.console import Console
-
-        return Console(
+        return _console_class()(
             stderr=stderr,
             # None lets Rich honour NO_COLOR from the environment.
             no_color=True if not self.color else None,

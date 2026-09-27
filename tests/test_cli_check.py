@@ -426,3 +426,68 @@ def test_os_errors_show_their_traceback_with_verbose(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, PermissionError)
+
+
+def test_shows_the_states_and_reasons_from_the_last_run(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SPADEWORK_EXECUTOR", "fake")
+    monkeypatch.delenv("SPADEWORK_FAKE_SCRIPT", raising=False)
+    root = make_project()
+    assert cli("run", "-q", "-C", root).exit_code == 0
+    # Only overview's and landscape's inputs globs match calls/.
+    (root / "inputs" / "calls").mkdir()
+    (root / "inputs" / "calls" / "2026-09-30-client-call.md").write_text("# Call\n")
+
+    result = cli("check", "-C", root)
+    document = json.loads(cli("check", "--json", "-C", root).stdout)
+
+    assert result.exit_code == 0
+    assert "inputs/calls/2026-09-30-client-call.md added" in result.stdout
+    assert [(t["id"], t["state"], t["reason"]) for t in document["tasks"]] == [
+        ("overview", "stale", "inputs/calls/2026-09-30-client-call.md added"),
+        (
+            "landscape",
+            "stale",
+            "inputs/calls/2026-09-30-client-call.md added, "
+            "dependency overview is stale",
+        ),
+        (
+            "plan",
+            "stale",
+            "dependency landscape is stale, dependency overview is stale",
+        ),
+    ]
+    assert not (root / ".spadework" / "lock").exists()
+
+
+def test_brief_md_cannot_be_a_task_output(
+    cli: Invoke, make_project: MakeProject
+) -> None:
+    root = make_project()
+    task = root / "playbooks" / "valid" / "tasks" / "overview.md"
+    task.write_text(
+        task.read_text().replace("output: 01-overview.md", "output: brief.md")
+    )
+
+    result = cli("check", "-C", root)
+
+    assert result.exit_code == 3
+    assert "'brief.md' is reserved for the project's brief" in result.stderr
+
+
+def test_a_brief_linked_from_outside_the_project_is_refused(
+    cli: Invoke, make_project: MakeProject, tmp_path: Path
+) -> None:
+    root = make_project()
+    outside = tmp_path / "elsewhere-brief.md"
+    outside.write_text((root / "brief.md").read_text())
+    (root / "brief.md").unlink()
+    (root / "brief.md").symlink_to(outside)
+
+    result = cli("check", "-C", root)
+
+    assert result.exit_code == 3
+    assert result.stderr.startswith(
+        "error: brief.md: is a link to a file outside the project\n"
+    )

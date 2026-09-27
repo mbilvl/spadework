@@ -55,7 +55,8 @@ def test_estimates_add_research_to_the_draft_budget(make_project: MakeProject) -
         ("pinned", False),
         ("stale", True),
         ("failed", True),
-        ("invalid", True),
+        # An invalid task waits for its key to change, or --force.
+        ("invalid", False),
     ],
 )
 def test_statuses_from_the_engine(
@@ -72,6 +73,30 @@ def test_statuses_from_the_engine(
         runs,
     )
     assert overview.estimate_usd == (0.50 if runs else 0.0)
+
+
+def test_only_selects_tasks(make_project: MakeProject) -> None:
+    project = load_project(make_project())
+
+    plan = build_plan(project, only=["landscape"])
+
+    assert [(t.id, t.selected, t.will_run) for t in plan.tasks] == [
+        ("overview", False, False),
+        ("landscape", True, True),
+        ("plan", False, False),
+    ]
+    assert plan.estimate_usd == 1.25
+
+
+def test_models_and_limits_can_be_overridden(make_project: MakeProject) -> None:
+    project = load_project(make_project())
+    models = project.config.models.model_copy(update={"review": "haiku"})
+    limits = project.config.limits.model_copy(update={"budget_usd": 2.0})
+
+    plan = build_plan(project, models=models, limits=limits)
+
+    assert [t.model for t in plan.tasks] == ["sonnet", "sonnet", "haiku"]
+    assert plan.limits.budget_usd == 2.0
 
 
 def test_models_follow_the_config(make_project: MakeProject, tmp_path: Path) -> None:

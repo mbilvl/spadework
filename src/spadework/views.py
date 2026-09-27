@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, Any
 
 from spadework.console import Ui
 from spadework.errors import SpadeworkError
-from spadework.plan import Plan, PlannedTask, task_estimate_usd
+from spadework.plan import SUMMARY_RESERVE_USD, Plan, PlannedTask, task_estimate_usd
 
 if TYPE_CHECKING:
     from rich.table import Table
 
+    from spadework.engine.events import RunFinished
+    from spadework.engine.status import ProjectStatus
     from spadework.playbook import Playbook
     from spadework.project import Project
     from spadework.render import PublicView
@@ -77,6 +79,27 @@ def print_plan(ui: Ui, plan: Plan) -> None:
     )
 
 
+def plan_warnings(plan: Plan) -> list[tuple[str, str | None]]:
+    """A warning for each task that could never start within the run budget."""
+    cap = usd(plan.limits.budget_usd)
+    reserve = usd(SUMMARY_RESERVE_USD)
+    return [
+        (
+            f"task {task.id!r} can never start: its estimate "
+            f"({usd(task.estimate_usd)}) plus the summary's reserve "
+            f"({reserve}) is over the run budget ({cap})",
+            "Raise limits.budget_usd in spadework.toml, or lower the task's "
+            "budget_usd in the playbook.",
+        )
+        for task in plan.never_start()
+    ]
+
+
+def plan_tasks_document(plan: Plan) -> list[dict[str, Any]]:
+    """The tasks of a plan, as ``run --json`` reports them."""
+    return [{**_task_document(task), "will_run": task.will_run} for task in plan.tasks]
+
+
 def _task_document(task: PlannedTask) -> dict[str, Any]:
     return {
         "id": task.id,
@@ -96,7 +119,7 @@ def _task_document(task: PlannedTask) -> dict[str, Any]:
 def check_document(
     project: Project,
     plan: Plan,
-    warnings: list[dict[str, str]],
+    warnings: list[dict[str, str | None]],
     public: PublicView | None,
 ) -> dict[str, Any]:
     limits = project.config.limits
@@ -242,3 +265,165 @@ def print_playbook(ui: Ui, playbook: Playbook) -> None:
             )
         table.add_row(task.id, text)
     ui.result(_indented(table))
+
+
+def _clock(seconds: float) -> str:
+    whole = max(round(seconds), 0)
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m{secs:02d}s"
+
+
+def print_run_finished(ui: Ui, event: RunFinished) -> None:
+    """The end of a run: the result on stdout, what to do next on stderr."""
+    sessions = f"{event.sessions} session" + ("" if event.sessions == 1 else "s")
+    ui.result(
+        f"run {event.run_id} · {event.outcome} · {usd(event.cost_usd)} of "
+        f"{usd(event.budget_usd)} · {sessions} · {_clock(event.duration_s)}"
+    )
+    for path in event.rendered:
+        ui.result(f"  wrote {path}")
+    if event.guard_denials:
+        denials = event.guard_denials
+        calls = "1 tool call" if denials == 1 else f"{denials} tool calls"
+        ui.warning(
+            f"the sandbox blocked {calls} in this run",
+            "See which with `spadework logs`.",
+        )
+    if event.possible_injection:
+        ui.warning(
+            "possible prompt injection encountered in the research for: "
+            + ", ".join(event.possible_injection),
+            "A web page may have tried to steer the session. Review those "
+            "documents and their sources with extra care.",
+        )
+    message = event.message or event.outcome
+    hint = event.hint or ""
+    match event.outcome:
+        case "complete":
+            ui.info("Next: read the pack in out/. `spadework status` shows each task.")
+        case "partial":
+            ui.warning(message, hint)
+        case "budget" | "time":
+            ui.warning(f"stopped: {message}", hint)
+        case "rate_limited":
+            after = f"; resume after {event.resume_after}" if event.resume_after else ""
+            ui.warning(f"stopped: {message}{after}", hint)
+        case "interrupted":
+            ui.err.print("interrupted", soft_wrap=True)
+            if hint:
+                ui.info(hint)
+        case "error":
+            ui.error(SpadeworkError(message, hint))
+
+
+def _local(timestamp: str) -> str:
+    """A manifest's UTC time, in local time to the minute."""
+    import datetime as dt
+
+    moment = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return moment.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _active_text(status: ProjectStatus) -> str:
+    active = status.active
+    if active is None:
+        return "no run is active"
+    if active.owner is None:
+        return ".spadework/lock exists but cannot be read"
+    who = f"pid {active.owner.pid}, started {_local(active.owner.started_at)}"
+    if active.alive is None:
+        return f"a run on host {active.owner.host} holds the lock ({who})"
+    if active.alive:
+        return f"a run is active ({who})"
+    return f"no run is active (a stopped run left its lock: {who})"
+
+
+def _last_run_text(status: ProjectStatus) -> str:
+    from spadework.engine.status import run_seconds
+
+    last = status.last_run
+    if last is None:
+        return "none yet"
+    outcome = last.outcome or (
+        "did not finish" if status.last_run_unfinished else "running"
+    )
+    sessions = f"{last.totals.sessions} session" + (
+        "" if last.totals.sessions == 1 else "s"
+    )
+    parts = [last.run_id, outcome, usd(last.totals.cost_usd), sessions]
+    seconds = run_seconds(last)
+    if seconds is not None:
+        parts.append(_clock(seconds))
+    parts.append(f"started {_local(last.started_at)}")
+    if last.rate_limit_reset:
+        parts.append(f"resets {_local(last.rate_limit_reset)}")
+    return " · ".join(parts)
+
+
+def print_status(ui: Ui, status: ProjectStatus) -> None:
+    from rich.text import Text
+
+    plan = status.planned.plan
+    ui.result(f"project   {plan.project} · {plan.playbook} {plan.playbook_version}")
+    ui.result(f"run       {_active_text(status)}")
+    ui.result(f"last run  {_last_run_text(status)}")
+    ui.result()
+    table = _table("task", "state", "reason")
+    for task in plan.tasks:
+        table.add_row(
+            task.id,
+            Text(task.state, style=_STATE_STYLES.get(task.state, "")),
+            task.reason or "",
+        )
+    ui.result(_indented(table))
+    if status.last_run_unfinished:
+        ui.info("The last run stopped without finishing. `spadework run` resumes it.")
+
+
+def status_document(project: Project, status: ProjectStatus) -> dict[str, Any]:
+    from spadework.engine.status import run_seconds
+
+    plan = status.planned.plan
+    active = status.active
+    last = status.last_run
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "ok": True,
+        "project": {"name": plan.project},
+        "playbook": {"name": plan.playbook, "version": plan.playbook_version},
+        "active_run": None
+        if active is None
+        else {
+            "pid": None if active.owner is None else active.owner.pid,
+            "host": None if active.owner is None else active.owner.host,
+            "started_at": None if active.owner is None else active.owner.started_at,
+            "alive": active.alive,
+        },
+        "last_run": None
+        if last is None
+        else {
+            "run_id": last.run_id,
+            "outcome": last.outcome,
+            "finished": last.outcome is not None,
+            "unfinished": status.last_run_unfinished,
+            "started_at": last.started_at,
+            "ended_at": last.ended_at,
+            "duration_s": run_seconds(last),
+            "cost_usd": last.totals.cost_usd,
+            "sessions": last.totals.sessions,
+            "guard_denials": last.totals.guard_denials,
+            "rate_limit_reset": last.rate_limit_reset,
+            "error": last.error,
+        },
+        "tasks": [
+            {
+                "id": task.id,
+                "output": task.output,
+                "state": task.state,
+                "reason": task.reason,
+            }
+            for task in plan.tasks
+        ],
+        "warnings": list(status.warnings),
+    }

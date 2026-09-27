@@ -23,7 +23,7 @@ shell alias.
 | `spadework logs [TASK] [--run ID] [--follow] [--raw]` | Show session traces | no |
 | `spadework verify [--json]` | Re-verify the sources in the pack | no (network only) |
 | `spadework playbooks list` / `show NAME` | List or show the built-in and local playbooks | no |
-| `spadework doctor [--canary]` | Check the environment. `--canary` runs a tiny live sandbox test. | `--canary` only (cents) |
+| `spadework doctor [--canary] [--json]` | Check the environment. `--canary` runs a tiny live sandbox test. | `--canary` only (cents) |
 | `spadework clean [--runs \| --cache \| --all] [--yes]` | Remove engine state. Never touches `brief.md` or `inputs/`. | no |
 | `spadework --version` | Print the version | no |
 
@@ -94,8 +94,34 @@ task could never start within the budget.
 | `--json` | off | Emit NDJSON events on stdout in place of the live view |
 
 `run` prints the plan, then starts. It does not ask for confirmation. The
-budget cap is the safety net, and `check` is the preview. If nothing is stale,
-it prints `up to date` and exits `0`.
+budget cap is the safety net, and `check` is the preview. If nothing needs
+doing, it prints `up to date` and exits `0`, or `4` when a task is still
+invalid.
+
+- Without `--only`, `--force` leaves pinned tasks alone with a warning;
+  `--force --only TASK` replaces a person's edits to that task's document.
+- `--refresh-research` applies to the tasks that run; it does not make a
+  fresh task run.
+- An invalid project (exit `3`), a bad option or an `--only` dependency that
+  has no output yet (`2`), and a held lock (`7`) are found before the run
+  starts, and write no manifest.
+
+With `--json`, `run` prints one JSON object per line on stdout, each with
+`schema_version`, `event` and `ts`:
+
+| `event` | Fields |
+|---|---|
+| `plan` | the tasks (with `will_run`), limits, estimate, warnings |
+| `up_to_date` | `exit_code`, the invalid tasks |
+| `run_started` | run id, versions, limits, tasks |
+| `session_started` | `n`, `task`, `kind`, `model`, `round`, `attempt`, `max_budget_usd`, `timeout_s` |
+| `tool_call` | `n`, `name`, `target` |
+| `denied` | as `tool_call`, plus `reason` and `possible_injection` |
+| `session_finished` | `n`, `status`, `cost_usd`, `duration_s`, `guard_denials`, `spent_usd`, `error`, `retry` |
+| `task_finished` | `task`, `state` (`fresh`, `invalid`, `failed` or `skipped`), `reason`, `validators` |
+| `notice` | `message`, `hint`, `level`, `task` |
+| `run_finished` | outcome, exit code, totals, message and hint, `rate_limit_reset`, `resume_after`, the files rendered, the tasks, `possible_injection`, the manifest path |
+| `error` | the failure document, when the run could not start |
 
 **Detached runs** are not a feature. Use your shell:
 `nohup spadework run > run.log 2>&1 &`, then `spadework status` or
@@ -104,6 +130,32 @@ it prints `up to date` and exits `0`.
 **Interrupts.** The first Ctrl-C stops the current session (SIGTERM to its
 process group, then SIGKILL after 5 s), writes the manifest, and exits `130`.
 A second Ctrl-C exits immediately.
+
+### `doctor`
+
+One line per check, marked ✓, ✗ or ! (a warning): Python, spadework, the
+executor and where it was chosen, the executor's own checks (see
+[05](05-executors.md)), and, inside a project or the folder given with `-C`,
+whether `check` passes. It exits `1` when a required check fails.
+
+`--canary` runs one `haiku` session, capped at $0.05 (it can pass the cap by
+one call), staged under the OS temporary directory and removed afterwards.
+It asks the model to read a file outside its staging directory, to write a
+second file, and to write its output. It passes only if the guard denied both
+forbidden calls, the second file does not exist, the outside file's content
+appears nowhere in the session, and the output was written. A step the model
+skipped fails as *not tested*. It needs the `claude-cli` executor and the
+other required checks to pass.
+
+### `logs`
+
+Shows the last run (or `--run ID`, or a unique prefix of it), with every
+session or only those of `TASK` (`critic` and `summary` name the review's
+sessions). Each tool call is one line, with denied calls highlighted, text
+snippets, and each session's status, cost, duration and denials. Logs are
+replayed through the executor's own parser. `--raw` prints the JSONL as
+recorded. `--follow` returns when the run ends. An unknown run or task exits
+`2`.
 
 ### Live view
 
@@ -138,7 +190,7 @@ Global options may be given before or after the command name.
 
 - Results go to **stdout**: tables, JSON, and paths. Progress, logs and
   warnings go to **stderr**.
-- `--json` makes `check`, `status` and `verify` print a single JSON document.
+- `--json` makes `check`, `status`, `verify` and `doctor` print a single JSON document.
   With `run`, it prints NDJSON events. JSON output is a public contract, and
   every object has a `schema_version`. On failure the document is
   `{"schema_version": 1, "ok": false, "error": {"message", "hint",
@@ -160,7 +212,7 @@ Global options may be given before or after the command name.
 | 3 | Invalid project, brief, or playbook |
 | 4 | Partial: the run finished, but some tasks failed or are invalid |
 | 5 | Stopped because the budget or time limit was reached. Resumable. |
-| 6 | Stopped because of a rate limit. Resumable. The reset time is printed. |
+| 6 | Stopped because of a rate limit. Resumable. The reset time is printed when the executor reports one. |
 | 7 | Another run holds the project lock |
 | 130 | Interrupted |
 

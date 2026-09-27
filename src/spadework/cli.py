@@ -297,36 +297,28 @@ def check(
     """Validate the project and print the plan.
 
     This is the dry run: it loads everything a run would use, renders every
-    template, and estimates the cost. It sends nothing to a model and spends
-    nothing. Exits 3 when the project, brief or playbook is not valid.
+    template, works out which tasks are stale and why, and estimates the
+    cost. It sends nothing to a model and spends nothing. Exits 3 when the
+    project, brief or playbook is not valid.
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
     with _reporting(ui, json_output=json_output):
         from spadework import views
-        from spadework.plan import SUMMARY_RESERVE_USD, build_plan
+        from spadework.engine.planning import plan_project
         from spadework.project import load_project
         from spadework.render import public_view
 
         loaded = load_project(options.base)
-        plan = build_plan(loaded)
+        plan = plan_project(loaded).plan
         if options.verbose:
             ui.info(f"playbook: {loaded.playbook.ref.display_root}")
             ui.info(f"inputs: {len(loaded.inputs)} files")
 
-        warnings = [(warning.message, warning.hint) for warning in loaded.warnings]
-        cap = views.usd(loaded.config.limits.budget_usd)
-        reserve = views.usd(SUMMARY_RESERVE_USD)
-        for task in plan.never_start():
-            warnings.append(
-                (
-                    f"task {task.id!r} can never start: its estimate "
-                    f"({views.usd(task.estimate_usd)}) plus the summary's reserve "
-                    f"({reserve}) is over the run budget ({cap})",
-                    "Raise limits.budget_usd in spadework.toml, or lower the task's "
-                    "budget_usd in the playbook.",
-                )
-            )
+        warnings: list[tuple[str, str | None]] = [
+            (warning.message, warning.hint) for warning in loaded.warnings
+        ]
+        warnings += views.plan_warnings(plan)
         for message, hint in warnings:
             ui.warning(message, hint)
 
@@ -344,6 +336,237 @@ def check(
                 ui.info(
                     "See what research sessions will see: spadework check --show-public"
                 )
+
+
+@app.command(
+    "run",
+    epilog=_examples(
+        "spadework run",
+        "spadework run --only stack --force",
+        "spadework run --budget-usd 3 --max-time 90m --no-review",
+        "spadework run --json | jq -c 'select(.event == \"task_finished\")'",
+    ),
+)
+def run_command(
+    ctx: typer.Context,
+    only: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--only",
+            metavar="TASK",
+            help=(
+                "Run only this task; repeat for more. Dependencies are not rerun: "
+                "their existing outputs are used."
+            ),
+            show_default=False,
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Redraft the selected tasks even if they are fresh. With --only, "
+                "also replaces your edits to their files in out/."
+            ),
+        ),
+    ] = False,
+    refresh_research: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-research",
+            help="Redo the research of the tasks that run, even if it is current.",
+        ),
+    ] = False,
+    no_review: Annotated[
+        bool, typer.Option("--no-review", help="Skip the review rounds.")
+    ] = False,
+    rounds: Annotated[
+        int | None,
+        typer.Option(
+            "--rounds",
+            metavar="N",
+            min=0,
+            help="Most review rounds. Default: limits.rounds.",
+            show_default=False,
+        ),
+    ] = None,
+    budget_usd: Annotated[
+        float | None,
+        typer.Option(
+            "--budget-usd",
+            metavar="X",
+            help="Spending cap for this run, in dollars. Default: limits.budget_usd.",
+            show_default=False,
+        ),
+    ] = None,
+    max_time: Annotated[
+        str | None,
+        typer.Option(
+            "--max-time",
+            metavar="D",
+            help="Wall-clock cap, such as 90m or 2h. Default: limits.max_time.",
+            show_default=False,
+        ),
+    ] = None,
+    wait_on_rate_limit: Annotated[
+        bool,
+        typer.Option(
+            "--wait-on-rate-limit",
+            help="Wait for a usage limit to reset instead of stopping, within "
+            "--max-time.",
+        ),
+    ] = False,
+    no_verify: Annotated[
+        bool, typer.Option("--no-verify", help="Skip source verification.")
+    ] = False,
+    draft_model: Annotated[
+        str | None,
+        typer.Option(
+            "--draft-model",
+            metavar="M",
+            help="Model for the draft tier. Default: models.draft.",
+            show_default=False,
+        ),
+    ] = None,
+    review_model: Annotated[
+        str | None,
+        typer.Option(
+            "--review-model",
+            metavar="M",
+            help="Model for the review tier. Default: models.review.",
+            show_default=False,
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print NDJSON events instead of the live view."),
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Run the pipeline. This spends money.
+
+    Prints the plan, then runs every task that is pending, stale or failed:
+    research, draft, validators and repair, and renders the pack into out/.
+    It does not ask first: the budget is the safety net, and `spadework
+    check` is the preview. Prints `up to date` when there is nothing to do.
+    Exits 4 when tasks failed or are invalid, 5 at the budget or time limit,
+    6 at a rate limit, 7 when another run holds the project, and 130 when
+    interrupted. A run that stops can be resumed by running again.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui):
+        from spadework.engine.display import LinesDisplay, LiveDisplay, NdjsonDisplay
+        from spadework.engine.run import RunOptions, run_project
+        from spadework.views import error_document
+
+        settings = RunOptions(
+            only=tuple(dict.fromkeys(only or ())),
+            force=force,
+            refresh_research=refresh_research,
+            review=not no_review,
+            rounds=rounds,
+            budget_usd=budget_usd,
+            max_time=max_time,
+            wait_on_rate_limit=wait_on_rate_limit,
+            verify=not no_verify,
+            draft_model=draft_model,
+            review_model=review_model,
+        )
+        display: NdjsonDisplay | LinesDisplay | LiveDisplay
+        if json_output:
+            display = NdjsonDisplay()
+        elif ui.err.is_terminal:
+            display = LiveDisplay(ui)
+        else:
+            display = LinesDisplay(ui)
+        try:
+            result = run_project(options.base, settings, reporter=display)
+        except BaseException as exc:
+            # The run did not start. With --json this is the last event; the
+            # human-readable error follows on stderr, from _reporting.
+            if isinstance(display, NdjsonDisplay):
+                display.error(error_document(_run_error(exc)))
+            raise
+        finally:
+            display.close()
+        if result.reporter_error is not None:
+            ui.warning(
+                f"progress output stopped: {type(result.reporter_error).__name__}: "
+                f"{result.reporter_error}",
+                "The run went on; `spadework status` shows how it ended.",
+            )
+        if result.exception is not None and ui.debug:
+            import traceback
+
+            ui.err.print(
+                "".join(traceback.format_exception(result.exception)), soft_wrap=True
+            )
+    raise typer.Exit(result.exit_code)
+
+
+def _run_error(exc: BaseException) -> SpadeworkError:
+    """What _reporting will say about ``exc``, as an error to report in JSON."""
+    if isinstance(exc, SpadeworkError):
+        return exc
+    if isinstance(exc, KeyboardInterrupt):
+        error = SpadeworkError("interrupted", "Nothing was run.")
+        error.exit_code = ExitCode.INTERRUPTED
+        return error
+    if isinstance(exc, OSError):
+        where = _shown(Path(exc.filename)) if exc.filename else "a file"
+        return SpadeworkError(
+            f"cannot use {where}: {exc.strerror or exc}",
+            "Check that the path exists and that you may read and write it.",
+        )
+    return SpadeworkError(
+        f"unexpected error: {type(exc).__name__}: {exc}",
+        "Run again with -v to see the traceback. Please report it as a bug.",
+    )
+
+
+@app.command(
+    epilog=_examples(
+        "spadework status",
+        "spadework status -C acme-fabrication --json | jq .last_run",
+    )
+)
+def status(
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print one JSON document instead of the table."),
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Show task states and the last run.
+
+    Shows each task's state and why, worked out as `spadework check` works it
+    out; the last run's outcome, spend, duration and sessions; and whether a
+    run is active. It sends nothing to a model and spends nothing.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui, json_output=json_output):
+        from spadework import views
+        from spadework.engine.status import project_status
+        from spadework.project import load_project
+
+        loaded = load_project(options.base)
+        current = project_status(loaded)
+        for warning in current.warnings:
+            ui.warning(warning)
+        if json_output:
+            ui.json(views.status_document(loaded, current))
+        else:
+            views.print_status(ui, current)
 
 
 @playbooks_app.command(
@@ -437,3 +660,106 @@ def show_playbook(
             exc.exit_code = ExitCode.USAGE
             raise
         print_playbook(ui, load_playbook(ref))
+
+
+@app.command(
+    epilog=_examples(
+        "spadework logs",
+        "spadework logs references",
+        "spadework logs --follow",
+        "spadework logs --run 20260927T210411Z-3f9a --raw | jq -c .type",
+    )
+)
+def logs(
+    ctx: typer.Context,
+    task: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="[TASK]",
+            help="Show only this task's sessions, or 'critic' or 'summary'.",
+            show_default=False,
+        ),
+    ] = None,
+    run_id: Annotated[
+        str | None,
+        typer.Option(
+            "--run",
+            metavar="ID",
+            help="Show this run instead of the last one.",
+            show_default=False,
+        ),
+    ] = None,
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", help="Keep printing as the run goes, until it ends."),
+    ] = False,
+    raw: Annotated[
+        bool, typer.Option("--raw", help="Print the raw JSONL event logs.")
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Show session traces.
+
+    By default it shows every session of the last run: one line per tool
+    call with its target, the calls the sandbox denied, snippets of the
+    model's text, and how each session ended. --follow keeps printing while
+    a run goes on, and stops when it ends.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui):
+        from spadework.logs import show_logs
+
+        show_logs(ui, options.base, task=task, run_id=run_id, follow=follow, raw=raw)
+
+
+@app.command(
+    epilog=_examples(
+        "spadework doctor",
+        "spadework doctor -C acme-fabrication",
+        "spadework doctor --canary",
+    )
+)
+def doctor(
+    ctx: typer.Context,
+    canary: Annotated[
+        bool,
+        typer.Option(
+            "--canary",
+            help="Also run a tiny live sandbox test. It costs a few cents.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print one JSON document instead of the list."),
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Check the environment spadework runs in.
+
+    Checks Python, the executor and Claude Code (its version, restricted
+    mode and login), and whether the project passes `spadework check`.
+    --canary also runs one small session that tries to read a file outside
+    its sandbox and to write a second file, and passes only if the guard
+    denies both. Exits 1 when a required check fails.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui, json_output=json_output):
+        from spadework.doctor import run_doctor
+
+        ok = run_doctor(
+            ui,
+            options.base,
+            explicit_project=options.project is not None,
+            canary=canary,
+            json_output=json_output,
+        )
+        if not ok:
+            raise typer.Exit(ExitCode.ERROR)

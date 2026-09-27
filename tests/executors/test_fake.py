@@ -129,9 +129,11 @@ def test_research(make_spec: MakeSpec) -> None:
         "https://directory.example/landscape",
         "https://benchmarks.example/landscape",
         "https://journal.example/landscape",
+        "https://survey.example/landscape",
+        "https://guide.example/landscape",
     ]
     assert record.sources[0].accessed == dt.datetime.now(dt.UTC).date().isoformat()
-    assert outcome.tool_calls == {"WebSearch": 1, "WebFetch": 3}
+    assert outcome.tool_calls == {"WebSearch": 1, "WebFetch": 5}
     assert recorder.of(ToolCall)[0] == ToolCall("WebSearch", "placeholder search")
     assert list(spec.workdir.iterdir()) == []  # research writes nothing
 

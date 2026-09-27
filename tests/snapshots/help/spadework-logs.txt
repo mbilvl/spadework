@@ -1,0 +1,28 @@
+Usage: spadework logs [OPTIONS] [TASK]
+
+  Show session traces.
+
+  By default it shows every session of the last run: one line per tool call with
+  its target, the calls the sandbox denied, snippets of the model's text, and
+  how each session ended. --follow keeps printing while a run goes on, and stops
+  when it ends.
+
+Arguments:
+  [TASK]  Show only this task's sessions, or 'critic' or 'summary'.
+
+Options:
+  --run ID            Show this run instead of the last one.
+  --follow            Keep printing as the run goes, until it ends.
+  --raw               Print the raw JSONL event logs.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework logs
+    spadework logs references
+    spadework logs --follow
+    spadework logs --run 20260927T210411Z-3f9a --raw | jq -c .type

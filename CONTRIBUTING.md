@@ -60,6 +60,12 @@ and 3.14. It also runs every pre-commit hook, and checks that
   `tests/security/` ([07 — Security](docs/spec/07-security.md)). If you find
   a way around the guard, report it privately first (see
   [Security](#security)).
+- **Changes to the sandbox or the executor** should also pass the
+  integration suite, which runs your installed Claude Code against a local
+  mock of the model API, so it needs `claude` on your PATH but spends
+  nothing and uses no credentials:
+  `SPADEWORK_TEST_CLAUDE=1 uv run pytest tests/integration`. It is skipped
+  by default and in CI.
 
 ## The spec moves with the code
 

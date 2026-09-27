@@ -1,18 +1,18 @@
 """The plan: which tasks a run would do, in what order, and what they cost.
 
-M1 has no engine state, so every task is ``pending``. The engine will pass
-the state it derives from ``state.json`` and the task fingerprints as
-``statuses``; everything else here stays the same.
+Each task's state comes from ``statuses``, which the engine derives from
+``state.json`` and the task keys (``spadework.engine.planning``). A task
+without one is ``pending``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from spadework.budget import DEFAULT_ESTIMATES_USD
-from spadework.config import LimitsSection
+from spadework.config import LimitsSection, ModelsSection
 from spadework.inputs import InputFile, match_inputs
 from spadework.playbook import Task
 from spadework.project import Project
@@ -21,8 +21,9 @@ SUMMARY_RESERVE_USD = DEFAULT_ESTIMATES_USD["summary"]
 
 TaskState = Literal["pending", "fresh", "stale", "failed", "invalid", "pinned"]
 
-# States whose task a run leaves alone.
-_SETTLED: frozenset[TaskState] = frozenset({"fresh", "pinned"})
+# States whose task a run drafts. A failed task is retried; an invalid one
+# waits for its key to change or --force (docs/spec/04-engine.md).
+_TO_RUN: frozenset[TaskState] = frozenset({"pending", "stale", "failed"})
 
 
 @dataclass(frozen=True)
@@ -48,10 +49,12 @@ class PlannedTask:
     # and the research default when the task has research.
     research_estimate_usd: float
     draft_estimate_usd: float
+    selected: bool = True
+    """False for a task that ``--only`` leaves out."""
 
     @property
     def will_run(self) -> bool:
-        return self.state not in _SETTLED
+        return self.selected and self.state in _TO_RUN
 
     @property
     def estimate_usd(self) -> float:
@@ -97,10 +100,20 @@ def task_estimate_usd(task: Task) -> float:
 
 
 def build_plan(
-    project: Project, statuses: Mapping[str, TaskStatus] | None = None
+    project: Project,
+    statuses: Mapping[str, TaskStatus] | None = None,
+    *,
+    models: ModelsSection | None = None,
+    limits: LimitsSection | None = None,
+    only: Collection[str] = (),
 ) -> Plan:
+    """The plan for ``project``.
+
+    ``models`` and ``limits`` replace the project's, as ``run``'s options do.
+    ``only`` selects tasks, as ``--only`` does; empty selects every task.
+    """
     statuses = statuses or {}
-    models = project.config.models
+    models = models or project.config.models
     planned = []
     for task in project.playbook.tasks:
         status = statuses.get(task.id, TaskStatus("pending"))
@@ -118,12 +131,13 @@ def build_plan(
                 reason=status.reason,
                 research_estimate_usd=research_estimate_usd(task),
                 draft_estimate_usd=task.budget_usd,
+                selected=not only or task.id in only,
             )
         )
     return Plan(
         project=project.config.project.name,
         playbook=project.playbook.name,
         playbook_version=project.playbook.version,
-        limits=project.config.limits,
+        limits=limits or project.config.limits,
         tasks=tuple(planned),
     )

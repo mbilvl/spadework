@@ -217,6 +217,10 @@ def test_invalid_manifest(tmp_path: Path) -> None:
     [
         ("title: T\n", "'output' is required"),
         ("title: T\noutput: sources.md\n", "'sources.md' is reserved"),
+        (
+            "title: T\noutput: Brief.md\n",
+            "'Brief.md' is reserved for the project's brief",
+        ),
         ("title: T\noutput: notes.txt\n", "use a file name ending in .md"),
         ("title: T\noutput: out/x.md\n", "use a file name ending in .md"),
         (

@@ -46,7 +46,9 @@ isolated is in [07 — Security](07-security.md).
 
 A session works on a staged copy of its output. After the session, the engine
 validates the copy and then moves it into `.spadework/work/`. Rendering into
-`out/` happens once, at the end of the run.
+`out/` happens once, at the end of the run. A file in `out/` that the engine
+has no record of is left alone with a warning, unless it already holds the
+same bytes.
 
 ## Fingerprints and staleness
 
@@ -121,7 +123,7 @@ accurate:
 | Run budget (`budget_usd`) | The engine does not start a session if `spent + estimate > budget`. The estimate is the task's `budget_usd`, or the default for that session kind. The summary's estimate is **reserved** at the start of the run, so the pack always gets a summary. |
 | Per-session cap | The CLI flag `--max-budget-usd = min(1.5 × estimate, remaining)` |
 | Run time (`max_time`) | The engine checks before each session. The guard denies tool calls after the deadline. |
-| Session timeout | `min(session_timeout, remaining time − 30 s)`. On timeout, the process group is killed. |
+| Session timeout | `min(session_timeout, remaining time − 30 s)`. On timeout, the process group is killed. A session starts only if that leaves at least 60 s; otherwise the run stops with outcome `time`. |
 | Research tool calls | The guard counts WebSearch and WebFetch calls against `max_searches` and `max_fetches` |
 | Total tool calls per session | The guard enforces a cap (default 80) to stop runaway loops |
 
@@ -137,12 +139,28 @@ tier: gathering sources doesn't need the stronger model.
 recognised rate-limit error, stops the run cleanly. The manifest records the
 reset time, and the CLI exits `6` and prints *resume after HH:MM*. With
 `--wait-on-rate-limit`, the engine sleeps until the reset plus 60 s, provided
-that fits within `max_time`. OS schedulers such as launchd, systemd timers
+that fits within `max_time` and still leaves time for a session. When the
+reset time is unknown, already past, or less than 5 minutes away, it waits 5
+minutes instead. A session is retried after at most 6 rate-limit waits; then
+the run stops as `rate_limited`. OS schedulers such as launchd, systemd timers
 and cron are the user's choice and are not built in.
 
 **Retries.** A transient executor error (the process exits without a
-result) is retried up to 2 times, waiting 10 s and then 30 s. Timeouts, budget
-stops and schema failures after one retry are not retried.
+result) is retried up to 2 times, waiting 10 s and then 30 s. A schema
+failure, including a session that returns `ok` without writing its output,
+is retried once. Timeouts and budget stops are not retried: the task fails
+when the limit was its own (`session_timeout`, or 1.5 × its estimate), and
+the run stops (`time` or `budget`) when the limit came from what was left of
+the run. `sandbox` and `executor` errors stop the run (`error`, exit `1`). A
+rate-limited session is retried after the wait.
+
+**Failed dependencies.** A task whose dependency failed or was skipped in
+this run is skipped: its state is unchanged, and the outcome is `partial`.
+A pinned dependency is recorded as read at its current key, so a person's
+edits never keep its dependents stale. If the run stops before a repair, the
+draft is recorded as `invalid`, so its cost is not lost. The outcome is
+`partial` when any task in the pack is failed or invalid, or failed or was
+skipped in this run, even when a person's edits stand in for it.
 
 ## Durability
 
@@ -161,8 +179,10 @@ stops and schema failures after one retry are not retried.
 
 ## Run manifest
 
-`.spadework/runs/<run-id>/manifest.json` is written on **every** exit path,
-including errors and interrupts. The run id is a UTC timestamp plus 4
+`.spadework/runs/<run-id>/manifest.json` is written when the run starts,
+after each session, and on **every** exit path, including errors and
+interrupts. Each session's log is created under `sessions/` when the session
+starts, named `NNN-<task>-<kind>.jsonl`. The run id is a UTC timestamp plus 4
 random hex characters, for example `20260927T210411Z-3f9a`.
 
 ```json

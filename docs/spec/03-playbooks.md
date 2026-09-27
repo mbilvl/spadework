@@ -85,7 +85,7 @@ mobile, and for low running cost.
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `title` | yes | — | |
-| `output` | yes | — | A file name ending in `.md`, unique within the playbook ignoring case, and neither `00-summary.md` nor `sources.md` |
+| `output` | yes | — | A file name ending in `.md`, unique within the playbook ignoring case, and none of `00-summary.md`, `sources.md` or `brief.md` |
 | `depends_on` | no | `[]` | Unknown ids and cycles are errors in `check` |
 | `tier` | no | `defaults.tier` | |
 | `inputs` | no | `["**"]` | Which inputs are staged, and which inputs make the task stale |
@@ -114,7 +114,7 @@ only during a run.
 | `task` | `id`, `title`, `output`, `tier`, `depends_on`, `inputs`, `has_research` |
 | `project` | `name` |
 | `files` | A list of `{path, heading}` for the staged files |
-| `deps` | A mapping from dependency id to `{id, title, output, key_facts}` |
+| `deps` | A mapping from dependency id to `{id, title, output, key_facts}`. `key_facts` is empty for a pinned dependency, whose document a person has edited. |
 | `research` | `{notes, sources, unanswered}`, each source carrying its verification status; `None` for a task without research |
 
 Every variable is read-only, and keys win over method names, so

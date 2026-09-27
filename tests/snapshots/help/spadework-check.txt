@@ -3,8 +3,9 @@ Usage: spadework check [OPTIONS]
   Validate the project and print the plan.
 
   This is the dry run: it loads everything a run would use, renders every
-  template, and estimates the cost. It sends nothing to a model and spends
-  nothing. Exits 3 when the project, brief or playbook is not valid.
+  template, works out which tasks are stale and why, and estimates the cost. It
+  sends nothing to a model and spends nothing. Exits 3 when the project, brief
+  or playbook is not valid.
 
 Options:
   --json              Print one JSON document instead of the plan table.

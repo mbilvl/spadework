@@ -13,6 +13,10 @@ Options:
 Commands:
   init       Create a project from a playbook.
   check      Validate the project and print the plan.
+  run        Run the pipeline.
+  status     Show task states and the last run.
+  logs       Show session traces.
+  doctor     Check the environment spadework runs in.
   playbooks  List or show the built-in and local playbooks.
 
   Examples:

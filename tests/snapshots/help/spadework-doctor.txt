@@ -1,0 +1,24 @@
+Usage: spadework doctor [OPTIONS]
+
+  Check the environment spadework runs in.
+
+  Checks Python, the executor and Claude Code (its version, restricted mode and
+  login), and whether the project passes `spadework check`. --canary also runs
+  one small session that tries to read a file outside its sandbox and to write a
+  second file, and passes only if the guard denies both. Exits 1 when a required
+  check fails.
+
+Options:
+  --canary            Also run a tiny live sandbox test. It costs a few cents.
+  --json              Print one JSON document instead of the list.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework doctor
+    spadework doctor -C acme-fabrication
+    spadework doctor --canary

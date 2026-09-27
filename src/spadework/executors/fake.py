@@ -87,11 +87,13 @@ DEFAULT_HEADINGS = ("Summary", "Findings", "Open questions")
 SUMMARY_HEADINGS = ("Executive summary", "Key decisions", "Open questions")
 EXTRA_FILE = "notes.md"
 
+# Five sources, so that tasks asking for up to five pass min_sources. Each
+# quote is one contiguous passage, as the research prompt asks.
 _SOURCES = (
     (
         "directory.example",
         "Example Directory",
-        "Listed providers … most offer a free tier for small teams",
+        "Most of the listed providers offer a free tier for small teams",
         "Most listed providers offer a free tier for small teams",
     ),
     (
@@ -105,6 +107,18 @@ _SOURCES = (
         "Placeholder Journal",
         "Buyers ranked ease of editing above price",
         "Buyers rank ease of editing above price",
+    ),
+    (
+        "survey.example",
+        "Sample Survey",
+        "Two in three respondents update their catalogue every month",
+        "Two in three businesses update their catalogue monthly",
+    ),
+    (
+        "guide.example",
+        "Example Guide",
+        "Photos sell the product before the specification does",
+        "Photos matter more than specifications to buyers",
     ),
 )
 _REQUIRED_HEADINGS = re.compile(r"^\s*required headings?:\s*(.+)$", re.I | re.M)
@@ -421,7 +435,9 @@ def research_result(task: str) -> dict[str, Any]:
             "Placeholder findings from the fake executor.\n\n"
             "- Most listed providers offer a free tier for small teams [S1].\n"
             "- Set-up takes about two days [S2].\n"
-            "- Buyers rank ease of editing above price [S3]."
+            "- Buyers rank ease of editing above price [S3].\n"
+            "- Two in three businesses update their catalogue monthly [S4].\n"
+            "- Photos matter more than specifications to buyers [S5]."
         ),
         "unanswered": ["Anything that needs a real web search"],
     }

@@ -128,8 +128,11 @@ class Source(Record):
             max_length=MAX_QUOTE_CHARS,
             pattern=_TEXT,
             description=(
-                "A verbatim excerpt from the page, at most 300 characters. Join "
-                "fragments with …. It is checked against the page."
+                "Copied verbatim from the page, at most 300 characters; code "
+                "checks it against the page. Give one contiguous passage if "
+                "you can. Otherwise give at most 4 fragments of at least 3 "
+                "words each, in page order, joined by …. Anything else fails "
+                "the check."
             ),
         ),
     ]

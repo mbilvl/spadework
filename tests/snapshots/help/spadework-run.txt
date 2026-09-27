@@ -1,0 +1,43 @@
+Usage: spadework run [OPTIONS]
+
+  Run the pipeline. This spends money.
+
+  Prints the plan, then runs every task that is pending, stale or failed:
+  research, draft, validators and repair, and renders the pack into out/. It
+  does not ask first: the budget is the safety net, and `spadework check` is the
+  preview. Prints `up to date` when there is nothing to do. Exits 4 when tasks
+  failed or are invalid, 5 at the budget or time limit, 6 at a rate limit, 7
+  when another run holds the project, and 130 when interrupted. A run that stops
+  can be resumed by running again.
+
+Options:
+  --only TASK           Run only this task; repeat for more. Dependencies are
+                        not rerun: their existing outputs are used.
+  --force               Redraft the selected tasks even if they are fresh. With
+                        --only, also replaces your edits to their files in out/.
+  --refresh-research    Redo the research of the tasks that run, even if it is
+                        current.
+  --no-review           Skip the review rounds.
+  --rounds N            Most review rounds. Default: limits.rounds.  [x>=0]
+  --budget-usd X        Spending cap for this run, in dollars. Default:
+                        limits.budget_usd.
+  --max-time D          Wall-clock cap, such as 90m or 2h. Default:
+                        limits.max_time.
+  --wait-on-rate-limit  Wait for a usage limit to reset instead of stopping,
+                        within --max-time.
+  --no-verify           Skip source verification.
+  --draft-model M       Model for the draft tier. Default: models.draft.
+  --review-model M      Model for the review tier. Default: models.review.
+  --json                Print NDJSON events instead of the live view.
+  -C, --project PATH    Run as if started in PATH, like git -C.
+  -q, --quiet           Print only results, warnings and errors.
+  -v, --verbose         Print more, including tracebacks.
+  --no-color            Disable colour. NO_COLOR is honoured too.
+  --help                Show this message and exit.
+
+  Examples:
+
+    spadework run
+    spadework run --only stack --force
+    spadework run --budget-usd 3 --max-time 90m --no-review
+    spadework run --json | jq -c 'select(.event == "task_finished")'

@@ -88,6 +88,7 @@ class Usage(StrictModel):
     input_tokens: Count = 0
     output_tokens: Count = 0
     cache_read_tokens: Count = 0
+    cache_creation_tokens: Count = 0
 
 
 class RejectedFinding(StrictModel):

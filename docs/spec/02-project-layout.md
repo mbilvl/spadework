@@ -16,8 +16,8 @@ acme-fabrication/
 └── .spadework/           # engine state                 (engine only; gitignored)
     ├── state.json        # per-task fingerprints, status, output hashes
     ├── work/             # raw task outputs (what fix sessions edit)
-    ├── records/          # structured session results (JSON)
-    ├── runs/<run-id>/    # manifest.json, sessions/*.jsonl, prompts/
+    ├── records/          # <task>.research.json (with verification), <task>.draft.json
+    ├── runs/<run-id>/    # manifest.json, sessions/NNN-<task>-<kind>.jsonl and .denials.jsonl
     ├── sessions/         # staging directories (temporary)
     ├── control/          # guard policies and settings for live sessions (temporary)
     └── lock

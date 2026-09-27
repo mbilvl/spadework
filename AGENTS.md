@@ -21,6 +21,7 @@ uv run ruff check .                  # lint
 uv run ruff format .                 # format
 uv run mypy src                      # strict type check
 uv run pre-commit run --all-files    # everything the commit hook runs
+SPADEWORK_TEST_CLAUDE=1 uv run pytest tests/integration   # real claude vs a mock API
 uv run spadework --help              # the CLI
 ```
 
@@ -48,7 +49,8 @@ Run the tests, lint, format check and type check before calling a change done.
   standard library only, and `import spadework` stays free of imports.
 - **Playbooks are data**: TOML, Markdown and sandboxed Jinja2. No code.
 - **Dependencies**: the runtime set is typer, rich, pydantic, pyyaml,
-  jinja2 and httpx. Adding one needs a sentence of justification.
+  jinja2 and httpx (with httpcore, which the verifier uses directly to pin
+  connections). Adding one needs a sentence of justification.
 - **Tests never call a model.** Use the fake executor. Don't run `claude`
   from tests, and don't spend money.
 - **CLI conventions** ([01](docs/spec/01-cli.md)): results on stdout,

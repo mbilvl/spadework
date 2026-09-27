@@ -58,25 +58,27 @@ that has a test; the models have at least 90% test coverage.
 
 ## M2 — Sandbox and executor: one task end to end · L
 
-- [ ] **Spike first** (time-boxed to 2 days; it can run during M1). Answer
+- [x] **Spike first** (time-boxed to 2 days; it can run during M1). Answer
       the five open items in [05 — Executors](spec/05-executors.md), above
       all whether `--restricted` can run unattended, and write the answers
       back into the spec.
-- [ ] Staging directories, per-session policy and settings generation, and the
+- [x] Staging directories, per-session policy and settings generation, and the
       control directory kept outside the staging dirs
-- [ ] `spadework.sandbox.guard`: standard library only, allowlist, path and
+- [x] `spadework.sandbox.guard`: standard library only, allowlist, path and
       pattern checks, exact writable paths, deadline, file-locked counters,
       denial log
-- [ ] **Security test suite**: a table-driven test with guard payloads. It
+- [x] **Security test suite**: a table-driven test with guard payloads. It
       includes every hole found in the prototype (control-file writes, writes
       to other documents, `mcp__*`, absolute Glob and Grep patterns,
       exfiltration URLs), plus `..`, symlinks, case and Unicode path tricks.
-- [ ] The `claude-cli` executor: the flag set, stream parsing, structured
+- [x] The `claude-cli` executor: the flag set, stream parsing, structured
       output, cost, rate-limit detection, and process-group timeouts
-- [ ] The `fake` executor, with recorded `stream-json` fixtures and
+- [x] The `fake` executor, with recorded `stream-json` fixtures and
       injectable failures
-- [ ] `run --only TASK` for a single draft session, `logs`, and
+- [x] `run --only TASK` for a single draft session, `logs`, and
       `doctor` with `--canary`
+
+*Status: built. The live checks (a real draft session and `doctor --canary`) are still to be run with a signed-in Claude Code; the sandbox is verified against the real CLI with a local mock of the model API.*
 
 **Done when** a real draft session runs sandboxed and produces a validated
 output and record; `doctor --canary` shows that a read outside the workdir
@@ -85,16 +87,18 @@ a task end to end through the fake executor.
 
 ## M3 — Pipeline: DAG, cache, budgets, resumability · L
 
-- [ ] Planner, draft and research keys, `state.json` (written atomically),
+- [x] Planner, draft and research keys, `state.json` (written atomically),
       and stale reasons
-- [ ] The research → draft split, with `public_context` only in research sessions
-- [ ] Built-in validators and the repair session
-- [ ] Pinned outputs: detect human edits in `out/` and never overwrite them silently
-- [ ] Budgets (per run and per session, with the summary's share reserved),
+- [x] The research → draft split, with `public_context` only in research sessions
+- [x] Built-in validators and the repair session
+- [x] Pinned outputs: detect human edits in `out/` and never overwrite them silently
+- [x] Budgets (per run and per session, with the summary's share reserved),
       `max_time`, session timeouts, and tool-call caps
-- [ ] Rate limits: a clean stop with exit code 6, and `--wait-on-rate-limit`
-- [ ] The lock, Ctrl-C handling, and a manifest written on every exit path
-- [ ] `status`, the Rich live view, plain output for non-TTY, and `run --json` NDJSON events
+- [x] Rate limits: a clean stop with exit code 6, and `--wait-on-rate-limit`
+- [x] The lock, Ctrl-C handling, and a manifest written on every exit path
+- [x] `status`, the Rich live view, plain output for non-TTY, and `run --json` NDJSON events
+
+*Status: built. A real `quickstart` run is still to be done with a signed-in Claude Code; the rest is verified with the fake executor.*
 
 **Done when** the `quickstart` playbook runs end to end for real; `kill -9`
 in the middle of a run followed by `run` again resumes without redrafting

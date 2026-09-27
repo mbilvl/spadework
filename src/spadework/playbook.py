@@ -47,8 +47,9 @@ PROMPTS_DIR = "prompts"
 
 # Engine base prompts a playbook may append to (docs/spec/03-playbooks.md).
 PROMPT_NAMES = ("critic", "draft", "fix", "repair", "research", "rules", "summary")
-# Files the engine itself writes into out/.
-RESERVED_OUTPUTS = ("00-summary.md", "sources.md")
+# Names a task's output cannot take: the files the engine itself writes into
+# out/, and brief.md, the name sessions see the project's brief under.
+RESERVED_OUTPUTS = ("00-summary.md", "sources.md", "brief.md")
 ENGINE_FORBIDDEN_PHRASES = (
     "lorem ipsum",
     "as an AI",
@@ -68,6 +69,8 @@ VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?"
 
 
 def _not_reserved(value: str) -> str:
+    if value.lower() == "brief.md":
+        raise ValueError(f"'{value}' is reserved for the project's brief")
     if value.lower() in RESERVED_OUTPUTS:
         raise ValueError(f"'{value}' is reserved for the file spadework writes itself")
     return value

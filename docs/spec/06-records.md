@@ -128,7 +128,9 @@ to the task questions it merges. `status` is `ok` or `partial`.
 ## Citations
 
 - Documents cite sources inline as `[S1]`, `[S2]`, and so on. IDs are local
-  to the task.
+  to the task, so a document never copies another document's `[S#]`: a fact
+  taken from another document is attributed to it by file name, for example
+  *(see 01-landscape.md)*. A task without research cites no `[S#]` at all.
 - A claim with no source is written as an inference ("likely", "we estimate")
   or tagged `[unverified]`.
 - When rendering to `out/`, the engine appends a `## Sources` section to each

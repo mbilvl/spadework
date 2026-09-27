@@ -76,12 +76,20 @@ def test_the_spec_example_is_a_valid_manifest() -> None:
     loaded = RunManifest.model_validate_json(json.dumps(SPEC_EXAMPLE))
     dumped = json.loads(loaded.model_dump_json())
     # Every field in the spec, plus the error and reset time, which are null
-    # unless a run or a session ends that way.
+    # unless a run or a session ends that way, and the cache creation tokens
+    # that the spec's text adds to the example's usage.
+    example = SPEC_EXAMPLE["sessions"][0]
     assert dumped == {
         **SPEC_EXAMPLE,
         "error": None,
         "rate_limit_reset": None,
-        "sessions": [{**SPEC_EXAMPLE["sessions"][0], "error": None}],
+        "sessions": [
+            {
+                **example,
+                "error": None,
+                "usage": {**example["usage"], "cache_creation_tokens": 0},
+            }
+        ],
     }
 
 
