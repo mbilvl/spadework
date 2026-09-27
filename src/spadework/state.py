@@ -82,12 +82,32 @@ class TaskEntry(StrictModel):
         return self.material.key
 
 
+FindingOrigin = Literal["critic", "validator"]
+
+
+class ReviewFinding(StrictModel):
+    """A finding the review acts on: the critic's, or a validator failure."""
+
+    id: str
+    """F1, F2, …: the critic's own, then those code added."""
+    task: str
+    target: str
+    """The document's file name."""
+    kind: str
+    severity: str
+    instruction: str
+    origin: FindingOrigin = "critic"
+    round: int = Field(default=0, ge=0)
+
+
 class ReviewProgress(StrictModel):
     """How far a run's review has got. Cleared once the run has rendered.
 
     It is set when a run first changes an output, so a run interrupted
-    before its review, fixes or summary finishes that work next time, even
-    when nothing is stale any more.
+    before its review, fixes, summary or render finishes that work next
+    time, even when nothing is stale any more. Each step is saved as it
+    ends, so a resumed run never repeats one: the critic of a round, each
+    fix, the repair a fix still owes, the summary.
     """
 
     run_id: str
@@ -98,19 +118,44 @@ class ReviewProgress(StrictModel):
     """This round's critic record, relative to ``.spadework/``, once it ran."""
     fixed: list[str] = Field(default_factory=list)
     """Tasks whose fix is done in this round, in order."""
+    repairs: list[str] = Field(default_factory=list)
+    """Fixed tasks whose validators failed, and whose repair is still owed."""
+    reviewed: bool = False
+    """The review rounds are over."""
+    summarised: bool = False
+    """The summary is done: only the render is left."""
+    pinned_findings: list[ReviewFinding] = Field(default_factory=list)
+    """Findings against documents a person edited, for the summary."""
 
     def next_round(self) -> ReviewProgress:
         return self.model_copy(
-            update={"round": self.round + 1, "critic": None, "fixed": []}
+            update={
+                "round": self.round + 1,
+                "critic": None,
+                "fixed": [],
+                "repairs": [],
+            }
         )
 
     def with_critic(self, record: str) -> ReviewProgress:
         return self.model_copy(update={"critic": record})
 
-    def with_fixed(self, task_id: str) -> ReviewProgress:
-        if task_id in self.fixed:
-            return self
-        return self.model_copy(update={"fixed": [*self.fixed, task_id]})
+    def with_fixed(self, task_id: str, *, repair: bool = False) -> ReviewProgress:
+        fixed = self.fixed if task_id in self.fixed else [*self.fixed, task_id]
+        repairs = [task for task in self.repairs if task != task_id]
+        if repair:
+            repairs.append(task_id)
+        return self.model_copy(update={"fixed": fixed, "repairs": repairs})
+
+    def with_repaired(self, task_id: str) -> ReviewProgress:
+        return self.with_fixed(task_id)
+
+    def with_pinned(self, findings: Iterable[ReviewFinding]) -> ReviewProgress:
+        known = {(f.round, f.id) for f in self.pinned_findings}
+        added = [f for f in findings if (f.round, f.id) not in known]
+        return self.model_copy(
+            update={"pinned_findings": [*self.pinned_findings, *added]}
+        )
 
 
 class State(StrictModel):
@@ -122,6 +167,13 @@ class State(StrictModel):
     tasks: dict[str, TaskEntry] = Field(default_factory=dict)
     research: dict[str, ResearchEntry] = Field(default_factory=dict)
     review: ReviewProgress | None = None
+    files: dict[str, str] = Field(default_factory=dict)
+    """The hash of each pack file that belongs to no task (``00-summary.md``,
+    ``sources.md``, ``pack.json``) as last rendered, by name in ``out/``."""
+    rendering: dict[str, str] = Field(default_factory=dict)
+    """Files in ``out/`` being rendered: the hash of the bytes about to be
+    written, saved before they are. A file that holds them is the engine's,
+    not a person's edit, even if the run stopped before recording it."""
 
     def record_research(
         self, task_id: str, *, key: str, record: str, run_id: str | None

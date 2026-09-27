@@ -30,6 +30,7 @@ INVALID = "not valid"
 SCHEME = "only http and https"
 USERINFO = "user name or password"
 SPACES = "spaces, control characters or backslashes"
+SPECIAL = "^special-use domain$"
 
 BLOCKED_LITERALS = [
     # IPv4 in every spelling a browser accepts.
@@ -116,6 +117,19 @@ BLOCKED_LITERALS = [
     # Ports.
     pytest.param("http://example.com:99999/", "port", id="port-too-big"),
     pytest.param("http://example.com:0/", "port", id="port-zero"),
+    # Special-use names: refused unresolved, whatever DNS would say.
+    pytest.param("https://cms.example/pricing", SPECIAL, id="special-example"),
+    pytest.param("https://example/", SPECIAL, id="special-bare-example"),
+    pytest.param("https://nothing.invalid/", SPECIAL, id="special-invalid"),
+    pytest.param("https://invalid./", SPECIAL, id="special-bare-invalid"),
+    pytest.param("https://site.test/", SPECIAL, id="special-test"),
+    pytest.param("https://test/", SPECIAL, id="special-bare-test"),
+    pytest.param("https://printer.local/", SPECIAL, id="special-local"),
+    pytest.param("https://PRINTER.LOCAL./", SPECIAL, id="special-local-case"),
+    pytest.param("https://wiki.corp.internal/", SPECIAL, id="special-internal"),
+    pytest.param("https://router.home.arpa/", SPECIAL, id="special-home-arpa"),
+    pytest.param("http://abcdef.onion/", SPECIAL, id="special-onion"),
+    pytest.param("https://name.alt/", SPECIAL, id="special-alt"),
 ]
 
 
@@ -197,11 +211,11 @@ def test_a_name_without_addresses_is_unresolvable(url: str, resolver: Resolver) 
             "dual.example.com",
         ),
         (
-            "https://bücher.example/",
-            "xn--bcher-kva.example",
+            "https://bücher.example.com/",
+            "xn--bcher-kva.example.com",
             443,
             (PUBLIC,),
-            "xn--bcher-kva.example",
+            "xn--bcher-kva.example.com",
         ),
         ("https://8.8.8.8/", "8.8.8.8", 443, ("8.8.8.8",), "8.8.8.8"),
         ("http://0x08080808/", "8.8.8.8", 80, ("8.8.8.8",), "8.8.8.8"),

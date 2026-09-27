@@ -1,0 +1,23 @@
+Usage: spadework verify [OPTIONS]
+
+  Check the quote of every source in the pack again.
+
+  Fetches each source's page and checks that its quote is on it. It sends
+  nothing to a model and spends nothing. Then it updates the research records
+  and renders out/sources.md, out/pack.json, out/00-summary.md and each
+  document's Sources section again; documents you edited are never touched.
+  Exits 0 whatever the checks find, 3 when the project is not valid, and 7 when
+  a run holds the project.
+
+Options:
+  --json              Print one JSON document instead of the table.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework verify
+    spadework verify -C acme-fabrication --json | jq .counts

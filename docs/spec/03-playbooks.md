@@ -150,7 +150,7 @@ Validators run in code after every draft, repair and fix session.
 | `required_headings` | list | Each name appears as a heading at any level, case-insensitive. Headings in code blocks don't count. Numbering before the name ("3. Cost") and a qualifier after it ("Cost (EUR)", "Cost: yearly") still match; "Costs" does not. |
 | `forbidden_phrases` | list | Added to the engine defaults: "lorem ipsum", "as an AI", "in this document we will", "this session", "session 2". Matched as whole words, ignoring case and line breaks. |
 | `max_open_questions` | int, default 6 | Counted from the record, not the text |
-| `citations_resolve` | bool, default on for research tasks | Every `[S#]` in the document exists in that task's sources. Grouped citations such as `[S1, S3]` count as citing each. |
+| `citations_resolve` | bool, default on | Every `[S#]` in the document exists in that task's sources; a task without research may cite none. Grouped citations such as `[S1, S3]` count as citing each. |
 | `min_sources` | int | Research tasks only (an error on any other task). Counts the distinct sources the document cites. |
 
 When a validator fails, the engine runs **one** repair session with the

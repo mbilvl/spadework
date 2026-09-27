@@ -46,7 +46,7 @@ def test_after_a_run(cli: Invoke, project: Path) -> None:
 
     lines = result.stdout.splitlines()
     assert re.fullmatch(
-        r"last run  \d{8}T\d{6}Z-[0-9a-f]{4} · complete · \$0\.29 · 4 sessions · "
+        r"last run  \d{8}T\d{6}Z-[0-9a-f]{4} · complete · \$0\.50 · 8 sessions · "
         r"0m\d\ds · started \d{4}-\d\d-\d\d \d\d:\d\d",
         lines[2],
     )
@@ -66,8 +66,9 @@ def test_json(cli: Invoke, project: Path) -> None:
     assert last["outcome"] == "complete"
     assert last["finished"] is True
     assert last["unfinished"] is False
-    assert last["sessions"] == 4
-    assert last["cost_usd"] == pytest.approx(0.29)
+    # Four drafting sessions, then the critic, a fix, the critic, the summary.
+    assert last["sessions"] == 8
+    assert last["cost_usd"] == pytest.approx(0.50)
     assert document["tasks"][0] == {
         "id": "overview",
         "output": "01-overview.md",

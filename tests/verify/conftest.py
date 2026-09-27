@@ -31,7 +31,7 @@ DNS: dict[str, list[str]] = {
     "evil.example.com": [PUBLIC_2],
     "v6.example.com": [PUBLIC_V6],
     "dual.example.com": [PUBLIC_V6, PUBLIC],
-    "xn--bcher-kva.example": [PUBLIC],
+    "xn--bcher-kva.example.com": [PUBLIC],
     "internal.example.com": ["10.0.0.5"],
     "mixed.example.com": [PUBLIC, "127.0.0.1"],
     "metadata.example.com": ["169.254.169.254"],

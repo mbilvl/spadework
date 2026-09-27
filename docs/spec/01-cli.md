@@ -131,6 +131,20 @@ With `--json`, `run` prints one JSON object per line on stdout, each with
 process group, then SIGKILL after 5 s), writes the manifest, and exits `130`.
 A second Ctrl-C exits immediately.
 
+### `verify`
+
+Re-checks the quote of every source in the pack's research records (network
+only; no model, nothing spent), updates the records, and renders
+`sources.md`, `pack.json`, the code-written parts of `00-summary.md` and each
+document's Sources section again. Documents a person edited are never
+touched, and the output names them. If the last run did not finish, only the
+records are updated, and the next `run` renders them. It takes the project
+lock and is bounded by `limits.max_time`; `[verify] enabled` applies to `run`
+only. It exits `0` whatever the checks find, `3` for an invalid project and
+`7` when the lock is held. With `--json` it prints `{schema_version, ok,
+counts, sources, written, kept, render_owed, warnings}`, where each source
+is `{id, task, url, status, detail, checked_at, final_url}`.
+
 ### `doctor`
 
 One line per check, marked ✓, ✗ or ! (a warning): Python, spadework, the

@@ -193,6 +193,8 @@ class Source:
     quote: str
     claim: str
     status: str
+    detail: str | None = None
+    """Why the check gave its status, in one line."""
 
 
 @dataclass(frozen=True)

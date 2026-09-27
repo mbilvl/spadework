@@ -32,3 +32,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   but `public_context`, and fails closed.
 - The `fake` executor (`SPADEWORK_EXECUTOR=fake`) for trying the CLI and for
   tests, without calling a model.
+- The review loop: a critic session reviews the whole pack each round, fix
+  sessions address its findings (or say why not), and validator failures
+  become findings too. Then a summary session writes `00-summary.md`, with
+  code-written tables for document states, source verification and costs.
+- The rendered pack: a Sources section in every document, `sources.md`, and
+  `pack.json`.
+- Source verification: each source's quote is checked against the live
+  page, with strict protection against requests to private networks, and
+  shown as a badge. `spadework verify` checks the sources again.

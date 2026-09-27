@@ -47,18 +47,20 @@ class Planned:
 def _unedited_outputs(
     state: State, out_hashes: dict[str, str | None]
 ) -> dict[str, str | None]:
-    """Treat a file in ``out/`` that holds the task's own output as unedited.
+    """Treat a file in ``out/`` that holds what the engine was rendering as
+    unedited.
 
     A run that stopped while rendering may have written the file without
-    recording its hash. Its bytes are still the engine's, so it is not a
-    person's edit and must not pin the task.
+    recording its hash (``state.rendering`` holds it). Its bytes are still
+    the engine's, so it is not a person's edit and must not pin the task.
     """
     seen = dict(out_hashes)
     for entry in state.tasks.values():
-        rendered, output = entry.rendered, entry.output
-        if rendered is None or output is None:
+        rendered = entry.rendered
+        if rendered is None:
             continue
-        if seen.get(rendered.path) == output.hash:
+        pending = state.rendering.get(rendered.path)
+        if pending is not None and seen.get(rendered.path) == pending:
             seen[rendered.path] = rendered.hash
     return seen
 

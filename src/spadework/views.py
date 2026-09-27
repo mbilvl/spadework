@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from rich.table import Table
 
     from spadework.engine.events import RunFinished
+    from spadework.engine.reverify import VerifyReport
     from spadework.engine.status import ProjectStatus
     from spadework.playbook import Playbook
     from spadework.project import Project
@@ -426,4 +427,79 @@ def status_document(project: Project, status: ProjectStatus) -> dict[str, Any]:
             for task in plan.tasks
         ],
         "warnings": list(status.warnings),
+    }
+
+
+def print_verify(ui: Ui, report: VerifyReport) -> None:
+    """``spadework verify``: counts per task on stdout, what to know on stderr."""
+    from spadework.engine.verification import BADGES, STATUSES, counts
+
+    if not report.sources:
+        ui.result("no sources to check")
+        ui.info("Sources come from research: `spadework run` does it.")
+        for message, hint in report.warnings:
+            ui.warning(message, hint)
+        return
+    total = report.counts()
+    # Only the statuses some source has, so the table fits a terminal.
+    shown = [s for s in STATUSES if total[s] or s == "verified"]
+    labels = [BADGES[status].split(" ", 1)[1] for status in shown]
+    table = _table("task", "sources", *labels, right=("sources", *labels))
+    for task in report.tasks:
+        found = [s.result.status for s in report.sources if s.task == task]
+        tally = counts(found)
+        table.add_row(task, str(len(found)), *(str(tally[s]) for s in shown))
+    ui.result(_indented(table))
+    listed = ", ".join(
+        f"{number} {BADGES[status].split(' ', 1)[1]}"
+        for status, number in total.items()
+        if number
+    )
+    count = len(report.sources)
+    ui.result(f"{count} source{'' if count == 1 else 's'}: {listed}")
+    for path in report.written:
+        ui.result(f"  wrote {path}")
+    for message, hint in report.warnings:
+        ui.warning(message, hint)
+    for path in report.kept:
+        ui.warning(
+            f"{path} was edited by a person, so its Sources section still shows "
+            "the earlier results",
+            "out/sources.md has the new ones.",
+        )
+    if report.render_owed:
+        ui.warning(
+            "the last run did not finish, so only the records were updated",
+            "`spadework run` finishes it and renders the pack with the new results.",
+        )
+    if total["verified"] < count:
+        ui.info(
+            "A failed check is not proof that a source was made up: pages change, "
+            "and some sites turn away automated readers. See out/sources.md."
+        )
+
+
+def verify_document(report: VerifyReport) -> dict[str, Any]:
+    return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "ok": True,
+        "counts": report.counts(),
+        "sources": [
+            {
+                "id": f"{source.task}:{source.id}",
+                "task": source.task,
+                "url": source.url,
+                "status": source.result.status,
+                "detail": source.result.detail,
+                "checked_at": source.result.checked_at,
+                "final_url": source.result.final_url,
+            }
+            for source in report.sources
+        ],
+        "written": list(report.written),
+        "kept": list(report.kept),
+        "render_owed": report.render_owed,
+        "warnings": [
+            {"message": message, "hint": hint} for message, hint in report.warnings
+        ],
     }

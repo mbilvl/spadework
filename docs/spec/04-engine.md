@@ -37,9 +37,12 @@ flowchart TD
 | `research` | stale task with `research` | Nothing on disk. The prompt holds public context and the questions. | WebSearch, WebFetch | nothing | `ResearchResult` |
 | `draft` | stale task | brief, matching inputs, dependency outputs, research notes and sources | Read, Glob, Grep, Write, Edit | its output | `DraftResult` |
 | `repair` | validators failed | same as draft, plus the failure messages | same as draft | its output | `DraftResult` |
-| `critic` | each review round | brief, all outputs, records digest | Read, Glob, Grep | nothing | `CriticResult` |
-| `fix` | a document has findings | brief, its output, its findings, its sources | Read, Glob, Grep, Write, Edit | its output | `FixResult` |
-| `summary` | end of run, if any output changed | brief, all outputs, all records | Read, Glob, Grep, Write | `00-summary.md` | `SummaryResult` |
+| `critic` | each review round | brief, inputs, all current documents (a person's edited version from `out/`), records digest | Read, Glob, Grep | nothing | `CriticResult` |
+| `fix` | a document has findings | brief, its matching inputs, its output, its findings (in the prompt), its sources with their verification status | Read, Glob, Grep, Write, Edit | its output | `FixResult` |
+| `summary` | end of run, if any output changed | brief, inputs, all documents, records digest | Read, Glob, Grep, Write | `00-summary.md` | `SummaryResult` |
+
+The critic and the summary use the `review` tier's model; a fix and its
+repair use the task's tier.
 
 Result schemas are in [06 — Records](06-records.md). How a session is
 isolated is in [07 — Security](07-security.md).
@@ -101,20 +104,37 @@ for round in 1..rounds:
   manifest and never written into the document.
 - Findings that name an unknown file are dropped and logged.
 - The default is 2 rounds.
+- Findings for validator failures get ids after the critic's and severity
+  `high`. A failure that a repair cannot fix is not a finding.
+- Findings on documents a person edited are recorded for the summary even
+  when the verdict is `ship`.
+- A round starts only if the time left covers a critic, a fix and the
+  summary. If the budget or time for the next critic or fix is not there, or
+  a review session used what was left of the budget, the review ends and the
+  summary still runs. If the critic fails, the review ends.
+- Targets match file names ignoring case, with a leading `out/` allowed. A
+  finding that names a task with no document is dropped.
 
 ## Summary
 
-The summary runs at the end of any run that changed an output. The session
+The summary runs at the end of any run that changed an output, or resumed
+one that had, or when the pack has no summary (never written, or the last
+one failed). If the session fails, `00-summary.md` holds only the
+code-written parts and a note, the outcome is `partial`, and the next run
+writes it again. The session
 writes the prose parts of `00-summary.md`: an executive summary of at most 12
 bullets, the key decisions with reasons, and at most 10 consolidated open
 questions. The engine appends sections rendered by code, so they are always
 accurate:
 
 - a table of documents with state, validator results and gaps
-- source verification counts
+- source verification counts per document and in total, with a flag when a
+  research session met *possible prompt injection* (I11)
+- review findings against documents a person edited, when there are any
 - the "How this pack was produced" footer: date, spadework, playbook and
-  executor versions, total cost, and a note that the pack is automated
-  research for a human to review
+  executor versions, the total cost over the recorded runs and this run's
+  share, and a note that the pack is automated research for a human to
+  review
 
 ## Budgets and limits
 
@@ -205,7 +225,7 @@ random hex characters, for example `20260927T210411Z-3f9a`.
       "tool_calls": { "Read": 3, "Write": 1 },
       "guard_denials": 0,
       "validators": [{ "name": "max_lines", "ok": true }],
-      "rejected_findings": [],
+      "rejected_findings": [{ "finding": "F3", "reason": "…", "instruction": "…" }],
       "log": "sessions/001-scope-draft.jsonl"
     }
   ],

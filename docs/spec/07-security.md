@@ -121,7 +121,11 @@ folder must not be inside the playbook folder, so a template cannot include
 ### I9. Verification fetches cannot reach private networks
 
 The verifier allows only `http` and `https` URLs without credentials, and
-refuses single-label host names. It resolves the name as an absolute name
+refuses single-label host names and special-use names (`.example`,
+`.invalid`, `.test`, `.localhost`, `.local`, `.internal`, `.home.arpa`,
+`.onion`, `.alt`, and the bare labels `example`, `invalid`, `test` and
+`localhost`) without any DNS lookup; the guard's WebFetch check refuses the
+same names, offline and before the caps. It resolves the name as an absolute name
 (so DNS search domains never apply), and every address must pass the
 guard's public-address rules (see "The guard"). It then connects only to an address it checked,
 sending the name in `Host` and in TLS SNI, so DNS rebinding cannot move the

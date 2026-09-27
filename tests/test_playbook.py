@@ -101,7 +101,8 @@ def test_validators_merge_task_settings_over_the_defaults(tmp_path: Path) -> Non
     assert overview.starts_with_h1 is True
     assert overview.forbidden_phrases == ENGINE_FORBIDDEN_PHRASES
     assert overview.max_open_questions == 6
-    assert overview.citations_resolve is False
+    # On for every task: one without research may cite no source at all.
+    assert overview.citations_resolve is True
     assert overview.min_sources is None
 
     assert landscape.citations_resolve is True
@@ -552,6 +553,18 @@ def test_task_files_must_be_utf8(tmp_path: Path) -> None:
 
 
 # Regressions from the M1 review.
+
+
+@pytest.mark.parametrize("value", ["false", "null"])
+def test_citations_resolve_can_be_turned_off(tmp_path: Path, value: str) -> None:
+    root = copy(tmp_path)
+    write_task(
+        root,
+        "extra",
+        f"title: Extra\noutput: 09-extra.md\nvalidate:\n  citations_resolve: {value}\n",
+    )
+
+    assert load(root).task("extra").validators.citations_resolve is False
 
 
 def test_null_turns_every_kind_of_inherited_validator_off(tmp_path: Path) -> None:

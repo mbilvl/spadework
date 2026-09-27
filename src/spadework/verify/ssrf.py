@@ -18,6 +18,8 @@ reach it, or, for IPv6, that address's /64.
 
 A host name must have at least two labels, and it is resolved as an
 absolute name (with a trailing dot), so DNS search domains never apply.
+Special-use names (`.example`, `.test`, `.local`, `.internal` and the rest of
+`guard.SPECIAL_USE_DOMAINS`) are refused without a lookup.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from spadework.sandbox.guard import (
     Resolver,
     is_own_network,
     is_public_address,
+    is_special_use,
     system_resolve,
     whatwg_ipv4,
 )
@@ -44,6 +47,8 @@ if TYPE_CHECKING:
     from spadework.sandbox.guard import Probe
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
+SPECIAL_USE = "special-use domain"
+"""Why a special-use name (.example, .test, .local, …) is refused, unresolved."""
 
 # Lower-case ASCII labels of at most 63 characters, which is what httpx
 # leaves after IDNA encoding, and what TLS will accept as a server name.
@@ -135,6 +140,8 @@ def vet(
             raise Blocked("the host name is not valid")
         if host == "localhost" or host.endswith(".localhost"):
             raise Blocked(f"{_short(host)} is a local address")
+        if is_special_use(host):
+            raise Blocked(SPECIAL_USE)
         try:
             literal = whatwg_ipv4(host)
         except ValueError:

@@ -36,5 +36,7 @@ you write, so it must be true, current and easy to use.
   what the document is for.
 - Never describe how the document was produced: no mention of sessions,
   prompts, tools, files you were given, or being an AI.
+- Do not add a Sources section or a list of references: code appends one
+  that lists the sources the document cites, with their verification status.
 - Write for the reader named below. Give them what they need to act, and
   leave out what they already know.

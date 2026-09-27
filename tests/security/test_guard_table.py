@@ -30,6 +30,7 @@ NOT_AVAILABLE = "is not available in this session"
 RELATIVE = "must be relative"
 ONLY_ON = "is allowed only on"
 PRIVATE = "cannot fetch local or private network addresses"
+SPECIAL = "cannot fetch special-use domain names"
 CONTROL = "contains a control character"
 
 NFD_OUTPUT = unicodedata.normalize("NFD", OUTPUT)
@@ -620,6 +621,22 @@ RESEARCH += [
     fetch("http://LOCALHOST:8080/", DENY, PRIVATE, "T4-localhost-upper-port"),
     fetch("http://localhost./", DENY, PRIVATE, "T4-localhost-dot"),
     fetch("http://api.localhost/", DENY, PRIVATE, "T4-localhost-subdomain"),
+    fetch("https://directory.example/", DENY, SPECIAL, "T4-special-example"),
+    fetch("https://example/", DENY, SPECIAL, "T4-special-bare-example"),
+    fetch("https://EXAMPLE./", DENY, SPECIAL, "T4-special-bare-example-dot"),
+    fetch("https://nothing.invalid/", DENY, SPECIAL, "T4-special-invalid"),
+    fetch("https://invalid/", DENY, SPECIAL, "T4-special-bare-invalid"),
+    fetch("https://site.test/", DENY, SPECIAL, "T4-special-test"),
+    fetch("https://test/", DENY, SPECIAL, "T4-special-bare-test"),
+    fetch("https://printer.local/", DENY, SPECIAL, "T4-special-mdns"),
+    fetch("https://Printer.Local./", DENY, SPECIAL, "T4-special-mdns-case"),
+    fetch("https://wiki.corp.internal/", DENY, SPECIAL, "T4-special-internal"),
+    fetch("https://router.home.arpa/", DENY, SPECIAL, "T4-special-home-arpa"),
+    fetch("http://abc.onion/", DENY, SPECIAL, "T4-special-onion"),
+    fetch("https://name.alt/", DENY, SPECIAL, "T4-special-alt"),
+    fetch("https://example.org/", ALLOW, "", "T4-not-special-example-org"),
+    fetch("https://testing.com/", ALLOW, "", "T4-not-special-suffix"),
+    fetch("https://local.com/", ALLOW, "", "T4-not-special-label"),
     fetch("http://127.0.0.1/", DENY, PRIVATE, "T4-loopback"),
     fetch("http://127.0.0.1:22/", DENY, PRIVATE, "T4-loopback-port"),
     fetch("http://127.1/", DENY, PRIVATE, "T4-short-ipv4"),
@@ -1121,6 +1138,37 @@ def test_write_with_no_writable_path(writer: Box) -> None:
 
     assert not decision.allow
     assert "this session writes no files" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://a.example/",
+        "https://x.test/",
+        "https://test/",
+        "https://printer.local/",
+        "https://db.internal./",
+        "https://nas.home.arpa/",
+    ],
+)
+def test_special_use_names_are_refused_without_a_lookup(
+    researcher: Box, url: str
+) -> None:
+    lookups: list[str] = []
+
+    def resolve(host: str) -> list[str]:
+        lookups.append(host)
+        return ["93.184.215.14"]
+
+    payload = researcher.payload("WebFetch", {"url": url, "prompt": "x"})
+    offline = guard.check_offline(payload, researcher.policy, now=NOW)
+    decision = guard.decide(payload, researcher.policy, now=NOW, resolve=resolve)
+
+    assert not offline.allow
+    assert offline.host is None
+    assert not decision.allow
+    assert SPECIAL in decision.reason
+    assert lookups == []
 
 
 def test_web_fetch_uses_the_system_resolver_by_default(

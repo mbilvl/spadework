@@ -87,10 +87,17 @@ def test_quickstart_end_to_end(cli: Invoke, quickstart: Path) -> None:
     lines = result.stdout.splitlines()
     assert lines[0] == "playbook  quickstart 0.1.0"
     assert "  landscape  pending          $1.15" in lines
+    # Three drafting sessions, then the critic, a fix, the critic, the summary.
     assert re.fullmatch(
-        r"run \S+ · complete · \$0\.21 of \$6\.00 · 3 sessions · 0m\d\ds", lines[-3]
+        r"run \S+ · complete · \$0\.42 of \$6\.00 · 7 sessions · 0m\d\ds", lines[-6]
     )
-    assert lines[-2:] == ["  wrote out/01-landscape.md", "  wrote out/02-questions.md"]
+    assert lines[-5:] == [
+        "  wrote out/00-summary.md",
+        "  wrote out/01-landscape.md",
+        "  wrote out/02-questions.md",
+        "  wrote out/pack.json",
+        "  wrote out/sources.md",
+    ]
     assert (
         (quickstart / "out" / "01-landscape.md").read_text().startswith("# Landscape\n")
     )
@@ -104,9 +111,35 @@ def test_quickstart_end_to_end(cli: Invoke, quickstart: Path) -> None:
         progress[1],
     )
     assert any(re.fullmatch(rf"{STAMP} landscape: fresh", line) for line in progress)
+    assert any(
+        re.fullmatch(
+            rf"{STAMP} critic: started \(opus, cap \$1\.50, timeout 25m, round 1\)",
+            line,
+        )
+        for line in progress
+    )
+    assert any(
+        re.fullmatch(rf"{STAMP} review round 2: the critic's verdict is ship", line)
+        for line in progress
+    )
     assert progress[-1] == (
         "Next: read the pack in out/. `spadework status` shows each task."
     )
+
+
+def test_logs_show_the_review_by_kind(cli: Invoke, quickstart: Path) -> None:
+    cli("run", "-q", "-C", quickstart)
+
+    critic = cli("logs", "critic", "-C", quickstart)
+    summary = cli("logs", "summary", "-C", quickstart)
+
+    assert critic.exit_code == 0
+    assert re.search(r"\n004 critic · critic · opus · round 1\n", critic.stdout)
+    assert re.search(r"\n006 critic · critic · opus · round 2\n", critic.stdout)
+    assert "landscape research" not in critic.stdout
+    assert "· fix ·" not in critic.stdout
+    assert re.search(r"\n007 summary · summary · opus\n", summary.stdout)
+    assert "  Write     00-summary.md\n" in summary.stdout
 
 
 def test_a_second_run_is_up_to_date(cli: Invoke, quickstart: Path) -> None:
@@ -163,16 +196,34 @@ def test_json_is_ndjson_events(cli: Invoke, quickstart: Path) -> None:
         "target",
     }
     finished = [event for event in events if event["event"] == "task_finished"]
+    # The last is the review's fix of 01-landscape.md.
     assert [(e["task"], e["state"]) for e in finished] == [
         ("landscape", "fresh"),
         ("questions", "fresh"),
+        ("landscape", "fresh"),
     ]
     assert finished[0]["validators"][0] == {"name": "max_lines", "ok": True}
+    review = [
+        (event["task"], event["kind"], event["round"])
+        for event in events
+        if event["event"] == "session_started" and event["round"]
+    ]
+    assert review == [
+        (None, "critic", 1),
+        ("landscape", "fix", 1),
+        (None, "critic", 2),
+    ]
     end = events[-1]
     assert end["outcome"] == "complete"
     assert end["exit_code"] == 0
-    assert end["sessions"] == 3
-    assert end["rendered"] == ["out/01-landscape.md", "out/02-questions.md"]
+    assert end["sessions"] == 7
+    assert end["rendered"] == [
+        "out/00-summary.md",
+        "out/01-landscape.md",
+        "out/02-questions.md",
+        "out/pack.json",
+        "out/sources.md",
+    ]
     assert end["tasks"] == {"landscape": "fresh", "questions": "fresh"}
     manifest = load_manifest(quickstart / end["manifest"])
     assert manifest.run_id == end["run_id"]
@@ -210,10 +261,39 @@ def test_discovery_website_on_the_example_project(
     assert result.exit_code == 0, result.stdout
     end = ndjson(result.stdout)[-1]
     assert end["outcome"] == "complete"
-    assert end["sessions"] == 12
-    assert len(end["rendered"]) == 9
+    # 9 drafts and 3 research sessions, then the critic, a fix of
+    # 01-scope.md, the critic again, and the summary.
+    assert end["sessions"] == 16
+    assert end["cost_usd"] < 6.0
     assert set(end["tasks"].values()) == {"fresh"}
-    assert (root / "out" / "06-tech-stack.md").is_file()
+    out = root / "out"
+    documents = sorted(path.name for path in out.glob("0[1-9]-*.md"))
+    assert len(documents) == 9
+    assert sorted(end["rendered"]) == sorted(
+        [f"out/{name}" for name in documents]
+        + ["out/00-summary.md", "out/pack.json", "out/sources.md"]
+    )
+    for name in documents:
+        text = (out / name).read_text()
+        assert text.count("\n## Sources\n") == 1, name
+    summary = (out / "00-summary.md").read_text()
+    for section in (
+        "## Executive summary",
+        "## Documents",
+        "## Source verification",
+        "## How this pack was produced",
+    ):
+        assert f"\n{section}\n" in summary
+    assert "| 06-tech-stack.md | 5 | 0 | 0 | 5 | 0 | 0 |" in summary
+    sources = (out / "sources.md").read_text()
+    assert sources.count("\n### S") == 15
+    pack = json.loads((out / "pack.json").read_text())
+    assert [d["file"] for d in pack["documents"]] == documents
+    assert {d["state"] for d in pack["documents"]} == {"fresh"}
+    assert pack["versions"]["playbook"] == "discovery-website@0.1.0"
+    assert "scope:D1" in {decision["id"] for decision in pack["decisions"]}
+    assert len(pack["sources"]) == 15
+    assert len(pack["consolidated_questions"]) == 9
 
 
 def test_discovery_website_reports_an_invalid_task(
@@ -378,7 +458,13 @@ app()
     assert resumed.exit_code == 0
     events = ndjson(resumed.stdout)
     sessions = [e for e in events if e["event"] == "session_started"]
-    assert [(e["task"], e["kind"]) for e in sessions] == [("questions", "draft")]
+    assert [(e["task"], e["kind"]) for e in sessions] == [
+        ("questions", "draft"),
+        (None, "critic"),
+        ("landscape", "fix"),
+        (None, "critic"),
+        (None, "summary"),
+    ]
     notices = [e["message"] for e in events if e["event"] == "notice"]
     assert any("reclaimed the project lock" in message for message in notices)
 
@@ -427,7 +513,7 @@ def test_a_reader_that_goes_away_does_not_change_the_exit_code(
     [path] = (quickstart / ".spadework" / "runs").glob("*/manifest.json")
     manifest = load_manifest(path)
     assert manifest.outcome == "complete"
-    assert len(manifest.sessions) == 3
+    assert len(manifest.sessions) == 7
     assert int(status.stdout) == manifest.exit_code == 0
     errors = (tmp_path / "err").read_text()
     assert "Exception ignored" not in errors

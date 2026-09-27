@@ -579,6 +579,29 @@ def test_an_older_unfinished_run_is_not_active(project: Path) -> None:
     assert is_active(newer)
 
 
+def test_the_last_run_is_the_latest_even_within_one_second(
+    cli: Invoke, project: Path
+) -> None:
+    # Two runs in the same second: the later one's random suffix sorts first,
+    # so only the manifests' write times tell them apart.
+    later = RUN_1.split("-")[0] + "-0000"
+    write_run(project, RUN_1, [entry(1, "scope", "draft")])
+    write_run(project, later, [entry(1, "audience", "draft")], outcome=None)
+    runs = project / ".spadework" / "runs"
+    os.utime(runs / RUN_1 / "manifest.json", ns=(1, 1))
+
+    from spadework.logs import run_ids
+
+    assert run_ids(project) == [RUN_1, later]
+    assert cli("logs", "-C", project).stdout.startswith(f"run {later} ")
+    hold_lock(project)
+    newer = Run(project, later)
+    newer.reload()
+    from spadework.logs import is_active
+
+    assert is_active(newer)
+
+
 def test_a_lock_left_by_a_dead_process_is_not_a_run(project: Path) -> None:
     write_run(project, RUN_1, [], outcome=None)
     path = project / ".spadework" / "lock"

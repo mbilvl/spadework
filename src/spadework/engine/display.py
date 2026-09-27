@@ -78,6 +78,9 @@ class _Row:
 
     task: str
     state: str = "pending"
+    before: str = "pending"
+    """The state before the current session, shown again if it ends
+    without changing it, as a failed review fix does."""
     kind: str = ""
     model: str = ""
     cost: float = 0.0
@@ -92,6 +95,7 @@ class _Row:
 _SYMBOLS = {
     "pending": ("·", "dim"),
     "running": ("▸", "cyan"),
+    "done": ("✓", "green"),
     "fresh": ("✓", "green"),
     "invalid": ("!", "red"),
     "failed": ("✗", "red"),
@@ -108,13 +112,18 @@ class _Progress:
     budget: float = 0.0
     max_time_s: int = 0
     spent: float = 0.0
+    round: int = 0
+    rounds: int = 0
     started: float = field(default_factory=time.monotonic)
     rows: dict[str, _Row] = field(default_factory=dict)
 
-    def row(self, task: str | None) -> _Row | None:
-        if task is None:
+    def row(self, task: str | None, kind: str = "") -> _Row | None:
+        """The row of a task, or of the critic or the summary, which have
+        a row of their own named after their kind."""
+        name = task if task is not None else kind
+        if not name:
             return None
-        return self.rows.setdefault(task, _Row(task))
+        return self.rows.setdefault(name, _Row(name))
 
     def update(self, event: ev.Event) -> None:
         match event:
@@ -124,29 +133,37 @@ class _Progress:
                     f"{event.playbook} {event.playbook_version}",
                 )
                 self.budget, self.max_time_s = event.budget_usd, event.max_time_s
+                self.rounds = event.rounds
                 self.started = time.monotonic()
                 self.rows = {task: _Row(task) for task in event.tasks}
             case ev.SessionStarted():
-                row = self.row(event.task)
+                self.round = max(self.round, event.round)
+                row = self.row(event.task, event.kind)
                 if row is not None:
+                    if row.state != "running":
+                        row.before = row.state
                     row.state, row.kind, row.model = "running", event.kind, event.model
                     row.started, row.target = time.monotonic(), ""
             case ev.ToolUsed():
-                row = self.row(event.task)
+                row = self.row(event.task, event.kind)
                 if row is not None:
                     row.target = f"{event.name} {event.target}"
             case ev.ToolDenied():
-                row = self.row(event.task)
+                row = self.row(event.task, event.kind)
                 if row is not None:
                     row.denials += 1
                     row.research_denials += int(event.possible_injection)
             case ev.SessionFinished():
                 self.spent = event.spent_usd
-                row = self.row(event.task)
+                row = self.row(event.task, event.kind)
                 if row is not None:
                     row.cost += event.cost_usd
                     row.seconds += event.duration_s
                     row.started, row.target = None, ""
+                    if event.task is None and not event.retry:
+                        row.state = "done" if event.status == "ok" else "failed"
+                    elif not event.retry and row.state == "running":
+                        row.state = row.before
             case ev.TaskFinished():
                 row = self.row(event.task)
                 if row is not None:
@@ -227,9 +244,14 @@ class LinesDisplay(_HumanDisplay):
         self.ui.err.print(message, soft_wrap=True)
 
 
+def _who(task: str | None, kind: str) -> str:
+    """How a line names a session: "stack draft", or "critic"."""
+    return kind if task is None else f"{task} {kind}"
+
+
 def denial(event: ev.ToolDenied) -> str:
     text = (
-        f"{event.task} {event.kind}: the sandbox blocked {event.name} "
+        f"{_who(event.task, event.kind)}: the sandbox blocked {event.name} "
         f"{event.target}: {event.reason}"
     )
     if event.possible_injection:
@@ -249,16 +271,18 @@ def line(event: ev.Event, progress: _Progress) -> str | None:
             )
         case ev.SessionStarted():
             attempt = f", attempt {event.attempt}" if event.attempt > 1 else ""
+            review = f", round {event.round}" if event.round else ""
             return (
-                f"{event.task} {event.kind}: started ({event.model}, cap "
+                f"{_who(event.task, event.kind)}: started ({event.model}, cap "
                 f"{usd(event.max_budget_usd)}, timeout "
-                f"{format_duration(event.timeout_s)}{attempt})"
+                f"{format_duration(event.timeout_s)}{review}{attempt})"
             )
         case ev.ToolUsed():
-            return f"{event.task} {event.kind}: {event.name} {event.target}"
+            return f"{_who(event.task, event.kind)}: {event.name} {event.target}"
         case ev.SessionFinished():
             text = (
-                f"{event.task} {event.kind}: {event.status}, {usd(event.cost_usd)}, "
+                f"{_who(event.task, event.kind)}: {event.status}, "
+                f"{usd(event.cost_usd)}, "
                 f"{elapsed(event.duration_s)} (spent {usd(event.spent_usd)} of "
                 f"{usd(progress.budget)})"
             )
@@ -321,9 +345,10 @@ class LiveView:
 
         progress = self.progress
         now = time.monotonic()
-        header = Text(
-            f"spadework · {progress.project} · {progress.playbook}", style="bold"
-        )
+        title = f"spadework · {progress.project} · {progress.playbook}"
+        if progress.round:
+            title += f" · round {progress.round}/{progress.rounds}"
+        header = Text(title, style="bold")
         table = Table.grid(padding=(0, 2))
         for _ in range(7):
             table.add_column()

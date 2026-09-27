@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 STATE_DIR = ".spadework"
 RUNS_DIR = "runs"
 SESSIONS_DIR = "sessions"
+_MANIFEST_FILE = "manifest.json"
 LOCK_FILE = "lock"
 POLL_S = 0.5
 
@@ -166,15 +167,32 @@ def _plural(count: int, noun: str) -> str:
 
 
 def run_ids(root: Path) -> list[str]:
-    """The project's runs, oldest first. Run ids sort by time."""
+    """The project's runs, oldest first.
+
+    A run id starts with its time to the second, then 4 random digits. Two
+    runs in the same second are ordered by their manifest's last write, as
+    ``status`` orders them: runs never overlap, so the later run wrote last.
+    """
     folder = root / STATE_DIR / RUNS_DIR
     if not folder.is_dir():
         return []
-    return sorted(
+    names = [
         name
         for name in os.listdir(folder)
         if _RUN_ID.match(name) and (folder / name).is_dir()
-    )
+    ]
+    return sorted(names, key=lambda name: _started(folder / name))
+
+
+def _started(run: Path) -> tuple[str, int, str]:
+    written = 0
+    for path in (run / _MANIFEST_FILE, run):  # the folder, if no manifest yet
+        try:
+            written = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        break
+    return run.name.split("-")[0], written, run.name
 
 
 def find_run(root: Path, run_id: str | None) -> Run:

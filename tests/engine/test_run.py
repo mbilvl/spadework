@@ -28,6 +28,9 @@ from tests.engine.conftest import (
     write_playbook,
 )
 
+REVIEW = ["critic", "overview:fix", "critic", "summary"]
+"""The fake critic asks for one fix to the first document, then ships."""
+
 
 def test_a_first_run_drafts_every_task_in_order(runner: Runner) -> None:
     ran = runner()
@@ -39,19 +42,26 @@ def test_a_first_run_drafts_every_task_in_order(runner: Runner) -> None:
         "landscape:research",
         "landscape:draft",
         "plan:draft",
+        *REVIEW,
     ]
     assert ran.tasks() == {"overview": "fresh", "landscape": "fresh", "plan": "fresh"}
     manifest = ran.manifest
     assert manifest.outcome == "complete"
     assert manifest.ended_at is not None
-    assert [s.kind for s in manifest.sessions] == [
-        "draft",
-        "research",
-        "draft",
-        "draft",
+    assert [(s.kind, s.round, s.task) for s in manifest.sessions] == [
+        ("draft", 0, "overview"),
+        ("research", 0, "landscape"),
+        ("draft", 0, "landscape"),
+        ("draft", 0, "plan"),
+        ("critic", 1, None),
+        ("fix", 1, "overview"),
+        ("critic", 2, None),
+        ("summary", 0, None),
     ]
-    assert manifest.totals.sessions == 4
-    assert manifest.totals.cost_usd == pytest.approx(0.08 * 3 + 0.05)
+    assert manifest.totals.sessions == 8
+    assert manifest.totals.cost_usd == pytest.approx(
+        0.08 * 3 + 0.05 + 0.06 * 2 + 0.04 + 0.05
+    )
     assert manifest.executor.version == "test"
     assert (manifest.limits.budget_usd, manifest.limits.rounds) == (6.0, 2)
     assert [s.log for s in manifest.sessions] == [
@@ -59,13 +69,27 @@ def test_a_first_run_drafts_every_task_in_order(runner: Runner) -> None:
         "sessions/002-landscape-research.jsonl",
         "sessions/003-landscape-draft.jsonl",
         "sessions/004-plan-draft.jsonl",
+        "sessions/005-critic.jsonl",
+        "sessions/006-overview-fix.jsonl",
+        "sessions/007-critic.jsonl",
+        "sessions/008-summary.jsonl",
+    ]
+    # The critic and the summary work on the whole pack: no task, no key.
+    assert [s.key is None for s in manifest.sessions] == [False] * 4 + [
+        True,
+        False,
+        True,
+        True,
     ]
     run_dir = ran.root / ".spadework" / "runs" / manifest.run_id
     assert all((run_dir / s.log).is_file() for s in manifest.sessions)
     assert ran.finished.rendered == (
+        "out/00-summary.md",
         "out/01-overview.md",
         "out/02-landscape.md",
         "out/03-plan.md",
+        "out/pack.json",
+        "out/sources.md",
     )
 
 
@@ -89,7 +113,9 @@ def test_outputs_state_and_records(runner: Runner) -> None:
         assert entry.output.hash == hash_file(work)
         assert entry.rendered is not None
         assert entry.rendered.hash == hash_file(root / "out" / output)
-        assert (root / "out" / output).read_bytes() == work.read_bytes()
+        # out/ holds the output with its Sources section after it.
+        rendered = (root / "out" / output).read_text()
+        assert rendered.startswith(work.read_text().rstrip("\n") + "\n\n## Sources\n")
         record = json.loads(
             (root / ".spadework" / "records" / f"{task_id}.draft.json").read_text()
         )
@@ -99,7 +125,14 @@ def test_outputs_state_and_records(runner: Runner) -> None:
         (root / ".spadework" / "records" / "landscape.research.json").read_text()
     )
     assert research["key"] == materials["landscape"].research_key
-    assert research["verification"] == {f"S{n}": "unchecked" for n in range(1, 6)}
+    # The fake's sources are on .example hosts, which are never fetched.
+    assert {
+        source_id: (result["status"], result["detail"])
+        for source_id, result in research["verification"].items()
+    } == {f"S{n}": ("unreachable", "blocked: special-use domain") for n in range(1, 6)}
+    assert research["guard_denials"] == 0
+    assert state.files.keys() == {"00-summary.md", "sources.md", "pack.json"}
+    assert state.rendering == {}
     assert state.research["landscape"].record == "records/landscape.research.json"
     # Staging directories and control files are removed after every session.
     assert list((root / ".spadework" / "sessions").iterdir()) == []
@@ -183,12 +216,15 @@ def test_draft_sessions_see_the_brief_inputs_dependencies_and_research(
         "research/notes.md",
         "research/sources.md",
     ]
-    assert "Verification: unchecked" in landscape.files["research/sources.md"]
+    assert (
+        "- Verification: unreachable (blocked: special-use domain)"
+        in landscape.files["research/sources.md"]
+    )
     prompt = landscape.spec.prompt
     assert "## Key facts from the documents this one builds on" in prompt
     assert "### 01-overview.md\n\n- Overview: placeholder content" in prompt
     assert "| S1 | Example Directory: landscape |" in prompt
-    assert "| unchecked |" in prompt
+    assert "| unreachable |" in prompt
     assert '- `inputs/calls/one.md`: an input ("Call one")' in prompt
     assert "Write the document to `02-landscape.md`" in prompt
     plan = ran.executor.of("plan", "draft")[0]
@@ -245,7 +281,7 @@ def test_adding_an_input_makes_exactly_the_matching_tasks_stale(
         "gamma": ("fresh", None),
     }
     again = run()
-    assert again.executor.kinds() == ["alpha:draft"]
+    assert again.executor.drafting() == ["alpha:draft"]
 
 
 def test_research_is_reused_while_its_key_matches(runner: Runner) -> None:
@@ -256,7 +292,11 @@ def test_research_is_reused_while_its_key_matches(runner: Runner) -> None:
     ran = runner()
 
     # Inputs change the draft key, not the research key.
-    assert ran.executor.kinds() == ["overview:draft", "landscape:draft", "plan:draft"]
+    assert ran.executor.drafting() == [
+        "overview:draft",
+        "landscape:draft",
+        "plan:draft",
+    ]
 
 
 def test_refresh_research(runner: Runner) -> None:
@@ -264,7 +304,7 @@ def test_refresh_research(runner: Runner) -> None:
 
     ran = runner(force=True, only=["landscape"], refresh_research=True)
 
-    assert ran.executor.kinds() == ["landscape:research", "landscape:draft"]
+    assert ran.executor.drafting() == ["landscape:research", "landscape:draft"]
 
 
 def test_a_brief_change_redoes_research_only_if_public_context_changed(
@@ -276,9 +316,13 @@ def test_a_brief_change_redoes_research_only_if_public_context_changed(
 
     ran = runner()
 
-    assert ran.executor.kinds() == ["overview:draft", "landscape:draft", "plan:draft"]
+    assert ran.executor.drafting() == [
+        "overview:draft",
+        "landscape:draft",
+        "plan:draft",
+    ]
     brief.write_text(brief.read_text().replace("planning a catalogue", "planning a"))
-    assert "landscape:research" in runner().executor.kinds()
+    assert "landscape:research" in runner().executor.drafting()
 
 
 def test_force_redrafts_fresh_tasks(runner: Runner) -> None:
@@ -286,7 +330,11 @@ def test_force_redrafts_fresh_tasks(runner: Runner) -> None:
 
     ran = runner(force=True)
 
-    assert ran.executor.kinds() == ["overview:draft", "landscape:draft", "plan:draft"]
+    assert ran.executor.drafting() == [
+        "overview:draft",
+        "landscape:draft",
+        "plan:draft",
+    ]
     assert ran.code == 0
 
 
@@ -296,7 +344,7 @@ def test_model_overrides(runner: Runner) -> None:
     ran = runner(draft_model="haiku")
 
     # The draft model is part of every draft-tier key, and of research's.
-    assert ran.executor.kinds() == [
+    assert ran.executor.drafting() == [
         "overview:draft",
         "landscape:research",
         "landscape:draft",
@@ -319,7 +367,7 @@ def test_only_runs_the_named_tasks_with_existing_dependency_outputs(
 
     ran = runner(only=["landscape"])
 
-    assert ran.executor.kinds() == ["landscape:draft"]
+    assert ran.executor.drafting() == ["landscape:draft"]
     staged = ran.executor.sessions[0].files
     assert "01-overview.md" in staged
     # overview is stale and was not redrafted: landscape read its older
@@ -352,7 +400,7 @@ def test_only_names_an_unknown_task(runner: Runner) -> None:
 def test_only_with_its_dependency_also_selected(runner: Runner) -> None:
     ran = runner(only=["overview", "landscape"])
 
-    assert ran.executor.kinds() == [
+    assert ran.executor.drafting() == [
         "overview:draft",
         "landscape:research",
         "landscape:draft",
@@ -374,7 +422,7 @@ def test_an_edited_output_is_pinned_and_used_as_it_stands(runner: Runner) -> Non
 
     ran = runner()
 
-    assert ran.executor.kinds() == ["landscape:draft", "plan:draft"]
+    assert ran.executor.drafting() == ["landscape:draft", "plan:draft"]
     assert out.read_text() == "# Overview\n\nEdited by a person.\n"
     staged = ran.executor.of("landscape", "draft")[0].files
     assert staged["01-overview.md"] == "# Overview\n\nEdited by a person.\n"
@@ -396,7 +444,7 @@ def test_force_alone_leaves_pinned_tasks(runner: Runner) -> None:
 
     ran = runner(force=True)
 
-    assert "overview:draft" not in ran.executor.kinds()
+    assert "overview:draft" not in ran.executor.drafting()
     assert out.read_text() == "# Mine\n"
     [plan] = ran.of(ev.PlanReady)
     assert plan.warnings == (
@@ -415,7 +463,7 @@ def test_force_only_replaces_a_pinned_output(runner: Runner) -> None:
 
     ran = runner(force=True, only=["overview"])
 
-    assert ran.executor.kinds() == ["overview:draft"]
+    assert ran.executor.drafting() == ["overview:draft"]
     assert out.read_text().startswith("# Overview\n")
     [plan] = ran.of(ev.PlanReady)
     assert plan.warnings == (
@@ -423,6 +471,13 @@ def test_force_only_replaces_a_pinned_output(runner: Runner) -> None:
     )
     states = {t.id: t.state for t in plan_project(load_project(runner.root)).plan.tasks}
     assert states["overview"] == "fresh"
+    # The review saw the new document, and the pack says it is fresh.
+    [critic, *_] = ran.executor.of(None, "critic")
+    assert critic.files["01-overview.md"].startswith("# Overview\n")
+    assert "| `01-overview.md` | Overview | fresh |" in critic.spec.prompt
+    assert ran.finished.tasks["overview"] == "fresh"
+    pack = json.loads((runner.root / "out" / "pack.json").read_text())
+    assert pack["documents"][0]["state"] == "fresh"
 
 
 def test_a_deleted_output_is_rendered_again(runner: Runner) -> None:
@@ -476,7 +531,7 @@ def test_a_crash_between_sessions_resumes_without_redrafting(
 
     ran = runner()
 
-    assert ran.executor.kinds() == ["plan:draft"]
+    assert ran.executor.drafting() == ["plan:draft"]
     assert ran.code == 0
     assert any("reclaimed the project lock" in n.message for n in ran.of(ev.Notice))
 
@@ -491,7 +546,7 @@ def test_state_is_saved_after_every_session(runner: Runner) -> None:
     runner()  # the state file exists from the first session on
     runner(executor=Recording(before=snapshot), force=True, refresh_research=True)
 
-    assert len(seen) == 4
+    assert len(seen) == 4 + len(REVIEW)
 
 
 def test_the_manifest_is_written_after_every_session(runner: Runner) -> None:
@@ -505,7 +560,7 @@ def test_the_manifest_is_written_after_every_session(runner: Runner) -> None:
 
     runner(executor=Recording(before=snapshot))
 
-    assert counts == [0, 1, 2, 3]
+    assert counts == list(range(4 + len(REVIEW)))
 
 
 def test_a_held_lock_stops_the_run_before_it_starts(runner: Runner) -> None:
@@ -532,7 +587,7 @@ def test_the_budget_stops_the_run_and_it_resumes(runner: Runner) -> None:
     # $2.00; landscape draft: 1.20 + 0.50 + 0.50 does not.
     assert ran.code == ExitCode.LIMIT
     assert ran.result.outcome == "budget"
-    assert ran.executor.kinds() == ["overview:draft", "landscape:research"]
+    assert ran.executor.drafting() == ["overview:draft", "landscape:research"]
     manifest = ran.manifest
     assert manifest.outcome == "budget"
     assert manifest.exit_code == ExitCode.LIMIT
@@ -543,7 +598,7 @@ def test_the_budget_stops_the_run_and_it_resumes(runner: Runner) -> None:
 
     resumed = runner()
 
-    assert resumed.executor.kinds() == ["landscape:draft", "plan:draft"]
+    assert resumed.executor.drafting() == ["landscape:draft", "plan:draft"]
     assert resumed.code == 0
 
 
@@ -631,7 +686,7 @@ def test_a_rate_limit_stops_the_run(runner: Runner) -> None:
     moment = dt.datetime.fromtimestamp(reset, dt.UTC)
     assert ran.manifest.rate_limit_reset == moment.strftime("%Y-%m-%dT%H:%M:%SZ")
     assert ran.finished.resume_after == moment.astimezone().strftime("%H:%M")
-    assert ran.executor.kinds() == ["overview:draft", "landscape:research"]
+    assert ran.executor.drafting() == ["overview:draft", "landscape:research"]
     assert ran.manifest.sessions[-1].status == "rate_limited"
 
 
@@ -643,7 +698,7 @@ def test_wait_on_rate_limit_waits_for_the_reset(runner: Runner) -> None:
     )
 
     assert ran.code == 0
-    assert ran.executor.kinds() == [
+    assert ran.executor.drafting() == [
         "overview:draft",
         "landscape:research",
         "landscape:research",
@@ -680,7 +735,7 @@ def test_a_rate_limit_on_a_successful_session_stops_before_the_next(
     ran = runner(executor=Recording(after=limited))
 
     assert ran.code == ExitCode.RATE_LIMITED
-    assert ran.executor.kinds() == ["overview:draft"]
+    assert ran.executor.drafting() == ["overview:draft"]
     assert ran.tasks() == {"overview": "fresh"}
     assert ran.state.tasks["overview"].status == "fresh"
 
@@ -697,7 +752,7 @@ def test_an_interrupt_ends_the_run_with_a_manifest(runner: Runner) -> None:
     assert "landscape" not in ran.state.tasks
     # The research done before the interrupt is kept.
     assert "landscape" in ran.state.research
-    assert runner().executor.kinds() == ["landscape:draft", "plan:draft"]
+    assert runner().executor.drafting() == ["landscape:draft", "plan:draft"]
 
 
 def test_ctrl_c_outside_a_session_ends_the_run_with_a_manifest(
@@ -750,7 +805,7 @@ def test_every_outcome_matches_its_exit_code(runner: Runner) -> None:
 def test_a_result_that_fails_its_schema_is_retried_once(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "invalid_schema", "times": 1}})
 
-    assert ran.executor.kinds()[:2] == ["overview:draft", "overview:draft"]
+    assert ran.executor.drafting()[:2] == ["overview:draft", "overview:draft"]
     first, second = ran.manifest.sessions[:2]
     assert first.status == "error"
     assert first.error is not None
@@ -764,7 +819,7 @@ def test_a_result_that_fails_its_schema_is_retried_once(runner: Runner) -> None:
 def test_a_second_schema_failure_fails_the_task(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "invalid_schema"}})
 
-    assert ran.executor.kinds() == ["overview:draft", "overview:draft"]
+    assert ran.executor.drafting() == ["overview:draft", "overview:draft"]
     assert ran.tasks() == {
         "overview": "failed",
         "landscape": "skipped",
@@ -776,13 +831,13 @@ def test_a_second_schema_failure_fails_the_task(runner: Runner) -> None:
     assert entry.error is not None
     assert entry.error.endswith("(after 2 attempts)")
     # A failed task is retried by the next run.
-    assert runner().executor.kinds()[0] == "overview:draft"
+    assert runner().executor.drafting()[0] == "overview:draft"
 
 
 def test_a_missing_output_is_retried_once(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "missing_output", "times": 1}})
 
-    assert ran.executor.kinds()[:2] == ["overview:draft", "overview:draft"]
+    assert ran.executor.drafting()[:2] == ["overview:draft", "overview:draft"]
     assert ran.manifest.sessions[0].error == "it did not write 01-overview.md"
     assert ran.code == 0
 
@@ -790,7 +845,7 @@ def test_a_missing_output_is_retried_once(runner: Runner) -> None:
 def test_transient_errors_are_retried_twice_with_waits(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "transient", "times": 2}})
 
-    assert ran.executor.kinds()[:3] == ["overview:draft"] * 3
+    assert ran.executor.drafting()[:3] == ["overview:draft"] * 3
     assert runner.clock.sleeps == [10.0, 30.0]
     assert ran.code == 0
 
@@ -798,7 +853,7 @@ def test_transient_errors_are_retried_twice_with_waits(runner: Runner) -> None:
 def test_a_third_transient_error_fails_the_task(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "transient"}})
 
-    assert ran.executor.kinds() == ["overview:draft"] * 3
+    assert ran.executor.drafting() == ["overview:draft"] * 3
     assert ran.tasks()["overview"] == "failed"
     assert [e.retry for e in ran.of(ev.SessionFinished)] == [True, True, False]
 
@@ -806,7 +861,7 @@ def test_a_third_transient_error_fails_the_task(runner: Runner) -> None:
 def test_a_timeout_fails_only_the_task(runner: Runner) -> None:
     ran = runner({"overview:draft": {"fail": "timeout"}})
 
-    assert ran.executor.kinds() == ["overview:draft"]
+    assert ran.executor.drafting() == ["overview:draft"]
     assert ran.tasks()["overview"] == "failed"
     error = ran.state.tasks["overview"].error
     assert error == "the session did not finish within session_timeout (25m)"
@@ -836,7 +891,7 @@ def test_a_repairable_failure_is_repaired(
 
     ran = Runner(root, research_tmp)({"alpha:repair": {"structured": fixed}})
 
-    assert ran.executor.kinds() == ["alpha:draft", "alpha:repair"]
+    assert ran.executor.drafting() == ["alpha:draft", "alpha:repair"]
     repair = ran.executor.sessions[1]
     assert repair.files["01-alpha.md"].startswith("# Alpha")
     assert "## What to repair" in repair.spec.prompt
@@ -844,7 +899,7 @@ def test_a_repairable_failure_is_repaired(
         repair.spec.prompt
     )
     assert ran.tasks() == {"alpha": "fresh"}
-    draft, repaired = ran.manifest.sessions
+    draft, repaired = ran.manifest.sessions[:2]
     assert [(v.name, v.ok) for v in draft.validators if not v.ok] == [
         ("max_open_questions", False)
     ]
@@ -871,7 +926,7 @@ def test_a_failed_repair_leaves_the_task_invalid_until_its_key_changes(
 
     ran = run()
 
-    assert ran.executor.kinds() == ["alpha:draft", "alpha:repair", "beta:draft"]
+    assert ran.executor.drafting() == ["alpha:draft", "alpha:repair", "beta:draft"]
     assert ran.tasks() == {"alpha": "invalid", "beta": "fresh"}
     assert ran.code == ExitCode.PARTIAL
     assert (root / "out" / "01-alpha.md").is_file()  # the pack is still produced
@@ -881,7 +936,7 @@ def test_a_failed_repair_leaves_the_task_invalid_until_its_key_changes(
     assert again.executor.sessions == []
     assert again.of(ev.UpToDate) == [ev.UpToDate(int(ExitCode.PARTIAL), ("alpha",))]
     assert again.code == ExitCode.PARTIAL
-    assert run(force=True, only=["alpha"]).executor.kinds() == [
+    assert run(force=True, only=["alpha"]).executor.drafting() == [
         "alpha:draft",
         "alpha:repair",
     ]
@@ -894,7 +949,7 @@ def test_an_unrepairable_failure_skips_the_repair(runner: Runner) -> None:
 
     ran = runner()
 
-    assert "landscape:repair" not in ran.executor.kinds()
+    assert "landscape:repair" not in ran.executor.drafting()
     assert ran.tasks()["landscape"] == "invalid"
     [session] = [
         s for s in ran.manifest.sessions if s.task == "landscape" and s.kind == "draft"
@@ -990,8 +1045,9 @@ def test_executor_notices_are_passed_on(runner: Runner) -> None:
     ran = runner(executor=Recording(emit=(notice,)))
 
     notices = [n for n in ran.of(ev.Notice) if n.message == notice.message]
-    assert len(notices) == 4
+    assert len(notices) == len(ran.executor.sessions) == 4 + len(REVIEW)
     assert notices[0].task == "overview"
+    assert notices[4].task is None  # the critic
 
 
 def test_the_guards_denial_log_is_kept_with_the_session_log(runner: Runner) -> None:
@@ -1054,9 +1110,11 @@ def test_a_repair_that_fails_keeps_the_draft(
         {"alpha": task_file("01-alpha.md", extra="validate:\n  max_open_questions: 0")},
     )
 
-    ran = Runner(root, research_tmp)({"alpha:repair": {"fail": "invalid_schema"}})
+    ran = Runner(root, research_tmp)(
+        {"alpha:repair": {"fail": "invalid_schema"}}, review=False
+    )
 
-    assert ran.executor.kinds() == ["alpha:draft", "alpha:repair", "alpha:repair"]
+    assert ran.executor.drafting() == ["alpha:draft", "alpha:repair", "alpha:repair"]
     assert ran.tasks() == {"alpha": "invalid"}
     messages = [n.message for n in ran.of(ev.Notice)]
     assert any(m.startswith("alpha: the repair failed (") for m in messages)
@@ -1077,7 +1135,7 @@ def test_a_stop_before_the_repair_keeps_the_draft(
     ran = Runner(root, research_tmp)({"alpha:draft": {"cost_usd": 0.5}}, budget_usd=1.2)
 
     assert ran.result.outcome == "budget"
-    assert ran.executor.kinds() == ["alpha:draft"]
+    assert ran.executor.drafting() == ["alpha:draft"]
     assert ran.state.tasks["alpha"].status == "invalid"
     assert (root / ".spadework" / "work" / "01-alpha.md").is_file()
 
@@ -1097,10 +1155,11 @@ def test_a_run_stopped_before_its_render_is_finished_by_the_next(
 
     ran = runner()
 
-    # Nothing is stale, but the render the last run owed is done now.
+    # Nothing is stale, but the render the last run owed is done now. Its
+    # review and summary were done: they are not done again.
     assert ran.executor.sessions == []
     assert ran.result.outcome == "complete"
-    assert len(ran.finished.rendered) == 3
+    assert len(ran.finished.rendered) == 6
     assert ran.state.review is None
 
 
@@ -1130,7 +1189,7 @@ def test_wait_on_rate_limit_backs_off_without_a_reset_time(runner: Runner) -> No
 
     assert ran.code == 0
     assert runner.clock.sleeps == [300.0]
-    assert ran.executor.kinds()[:2] == ["overview:draft", "overview:draft"]
+    assert ran.executor.drafting()[:2] == ["overview:draft", "overview:draft"]
     waiting = [n for n in ran.of(ev.Notice) if n.level == "info"]
     assert waiting[0].message.startswith("the usage limit was reached; waiting until ")
 
@@ -1166,7 +1225,9 @@ def test_a_failed_force_only_redraft_keeps_the_persons_edits(runner: Runner) -> 
     assert ran.tasks() == {"overview": "failed"}
     assert ran.result.outcome == "partial"
     assert out.read_text() == edited
-    assert ran.finished.rendered == ()
+    # The summary's table and pack.json say it failed; the document is kept.
+    assert ran.finished.rendered == ("out/00-summary.md", "out/pack.json")
+    assert ran.executor.drafting() == ran.executor.kinds() == ["overview:draft"]
     states = {t.id: t.state for t in plan_project(load_project(runner.root)).plan.tasks}
     assert states["overview"] == "pinned"
 
@@ -1187,10 +1248,10 @@ def test_a_redraft_that_ends_invalid_still_replaces_the_pinned_file(
 
     ran = runner(force=True, only=["overview"])
 
-    assert ran.executor.kinds() == ["overview:draft", "overview:repair"]
-    assert ran.tasks() == {"overview": "invalid"}
+    assert ran.executor.drafting() == ["overview:draft", "overview:repair"]
+    assert ran.tasks()["overview"] == "invalid"
     assert out.read_text().startswith("# Overview\n")
-    assert ran.finished.rendered == ("out/01-overview.md",)
+    assert "out/01-overview.md" in ran.finished.rendered
 
 
 def test_a_reset_in_the_past_backs_off_instead_of_spinning(runner: Runner) -> None:
@@ -1263,7 +1324,7 @@ def test_a_failing_reporter_does_not_change_how_the_run_ends(runner: Runner) -> 
     assert isinstance(result.reporter_error, BrokenPipeError)
     assert result.manifest is not None
     assert result.manifest.outcome == "complete"
-    assert len(result.manifest.sessions) == len(executor.sessions) == 4
+    assert len(result.manifest.sessions) == len(executor.sessions) == 4 + len(REVIEW)
 
 
 def test_a_session_an_exception_ends_is_still_recorded_at_its_cap(
@@ -1362,8 +1423,8 @@ def test_a_render_cut_short_does_not_pin_the_engines_own_file(
     assert ran.result.outcome == "complete"
     entry = ran.state.tasks["overview"]
     assert entry.rendered is not None
-    assert entry.output is not None
-    assert entry.rendered.hash == entry.output.hash
+    assert entry.rendered.hash == hash_file(runner.root / "out" / "01-overview.md")
+    assert ran.state.rendering == {}
 
 
 def test_a_brief_linked_inside_the_project_is_staged_by_its_target(
@@ -1392,7 +1453,7 @@ def test_a_task_without_research_may_cite_no_sources(
 
     ran = Runner(root, research_tmp)()
 
-    assert ran.executor.kinds() == ["alpha:draft", "alpha:repair"]
+    assert ran.executor.drafting() == ["alpha:draft", "alpha:repair"]
     assert "- No `[S#]` citations" in ran.executor.sessions[0].spec.prompt
     [failure] = [v for v in ran.manifest.sessions[0].validators if not v.ok]
     assert failure.name == "citations_resolve"

@@ -96,6 +96,8 @@ class RejectedFinding(StrictModel):
 
     finding: str
     reason: str
+    instruction: str | None = None
+    """What the finding asked for, so the entry reads on its own."""
 
 
 class SessionEntry(StrictModel):

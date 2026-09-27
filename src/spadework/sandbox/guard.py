@@ -450,6 +450,11 @@ def _checked_url(raw: object) -> str | None:
         raise _Denied("WebFetch: the host name is not valid.")
     if name == "localhost" or name.endswith(".localhost"):
         raise _Denied("WebFetch cannot fetch local or private network addresses.")
+    if is_special_use(name):
+        raise _Denied(
+            "WebFetch cannot fetch special-use domain names, such as .example, "
+            ".test, .local or .internal."
+        )
     address = _whatwg_ipv4(name)
     if address is not None:
         _require_public([address])
@@ -461,6 +466,31 @@ def _checked_url(raw: object) -> str | None:
             "WebFetch: the host must be a full domain name, such as example.com."
         )
     return name
+
+
+# Special-use domain names (RFC 6761, RFC 8375, RFC 7686, RFC 9476, and
+# .internal, which ICANN reserved for private use). They never name a public
+# site, so they are refused without a DNS lookup: a resolver may answer them
+# with a local address, or leak the lookup to the local network.
+SPECIAL_USE_DOMAINS = (
+    "example",
+    "invalid",
+    "test",
+    "localhost",
+    "local",
+    "internal",
+    "home.arpa",
+    "onion",
+    "alt",
+)
+
+
+def is_special_use(host: str) -> bool:
+    """Whether a lower-case host name is, or is under, a special-use name."""
+    name = host.removesuffix(".")
+    return any(
+        name == domain or name.endswith("." + domain) for domain in SPECIAL_USE_DOMAINS
+    )
 
 
 def _resolves_to_public(name: str, resolve: Resolver) -> None:

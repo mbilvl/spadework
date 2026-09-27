@@ -5,8 +5,8 @@ the project lock, plans with the real keys and state, and then, for each task
 that needs it, in order: research (when its key changed, it has no stored
 result, or ``--refresh-research``) → verification → draft → validators →
 one repair when a failure is repairable. State is saved after every session
-that changes it, and the manifest after every session. The review loop and
-the summary come next (M4), then rendering into ``out/``.
+that changes it, and the manifest after every session. The review rounds and
+the summary come next (``review``), then rendering into ``out/`` (``pack``).
 
 Nothing raised after the run starts escapes without a manifest: budget and
 time stops, rate limits, interrupts, executor errors and bugs all end with
@@ -35,7 +35,6 @@ from spadework.engine.planning import Planned, plan_project
 from spadework.engine.prompts import (
     RESEARCH_NOTES,
     RESEARCH_SOURCES,
-    checks_for,
     draft_prompt,
     notes_file,
     repair_prompt,
@@ -44,8 +43,11 @@ from spadework.engine.prompts import (
     sources_file,
     writer_system_prompt,
 )
+from spadework.engine.review import Review, summary_owed
 from spadework.engine.session import (
+    MIN_SESSION_S,
     RESUME,
+    TIME_MARGIN_S,
     TRANSIENT_WAITS_S,
     Clock,
     RunLimits,
@@ -69,7 +71,15 @@ from spadework.engine.store import (
     write_record,
     write_work,
 )
-from spadework.engine.verification import SourceVerifier, UncheckedVerifier
+from spadework.engine.verification import (
+    BADGES,
+    STATUSES,
+    NetworkVerifier,
+    SourceVerifier,
+    VerificationResult,
+    as_result,
+    counts,
+)
 from spadework.errors import ExitCode, SpadeworkError, UsageError
 from spadework.executors import Executor, SessionKind, get_executor
 from spadework.inputs import INPUTS_DIR, first_heading, match_inputs, scan_inputs
@@ -234,7 +244,8 @@ def _run_project(
         if (
             not planned.to_run
             and planned.state.review is None
-            and not render_pending(root, project.playbook, planned.state)
+            and not summary_owed(project, planned.state)
+            and not render_pending(project, planned.state)
         ):
             invalid = tuple(
                 task.id for task in planned.plan.tasks if task.state == "invalid"
@@ -249,7 +260,7 @@ def _run_project(
             models=models,
             limits=limits,
             executor=executor,
-            verifier=verifier or UncheckedVerifier(),
+            verifier=verifier or NetworkVerifier(),
             clock=clock or SystemClock(),
             reporter=reporter,
             transient_waits=transient_waits,
@@ -406,6 +417,7 @@ class _Run:
         self.rendered: list[str] = []
         self.final: dict[str, str] | None = None
         """Each task's state once the run has rendered."""
+        self.summary_error: str | None = None
 
     def execute(self) -> RunResult:
         outcome: Outcome = "error"
@@ -417,7 +429,14 @@ class _Run:
             try:
                 self._save_manifest()
                 self.report(self._started())
-                adopt_rendered(self.root, self.state)
+                adopt_rendered(self.project, self.state)
+                if self.state.review is None and summary_owed(self.project, self.state):
+                    # The last summary failed, or there never was one: only
+                    # the summary and the render are owed.
+                    self.state.review = ReviewProgress(
+                        run_id=self.run_id, reviewed=True
+                    )
+                self.save_state()
                 for task_id in self.planned.to_run:
                     self._task(self.playbook.task(task_id))
                 self._review()
@@ -553,18 +572,26 @@ class _Run:
                 key=key,
                 run_id=self.run_id,
                 result=result,
-                verification={source.id: "unchecked" for source in result.sources},
+                verification={
+                    source.id: VerificationResult() for source in result.sources
+                },
+                guard_denials=outcome.guard_denials,
             )
             name = write_record(self.root, research_record_name(task.id), record)
             self.state.record_research(
                 task.id, key=key, record=name, run_id=self.run_id
             )
-            self._save_state()
+            self.save_state()
         assert name is not None
         return self._verify(record, name)
 
     def _verify(self, record: ResearchRecord, name: str) -> ResearchRecord:
-        """Check the sources not yet checked, unless verification is off."""
+        """Check the sources not yet checked, unless verification is off.
+
+        Checking counts against the run's time. It is given what is left
+        once a draft session could still start; with less than that, the
+        sources stay unchecked for the next run, which drafts next anyway.
+        """
         verify = self.options.verify and self.project.config.verify.enabled
         unchecked = [
             source
@@ -574,11 +601,15 @@ class _Run:
         if not verify or not unchecked:
             return record
         left = self.limits.deadline - self.clock.monotonic()
-        found = self.verifier.verify_sources(unchecked, time_limit=max(left, 0.0))
+        room = left - TIME_MARGIN_S - MIN_SESSION_S
+        if room <= 0:
+            return record
+        found = self.verifier.verify_sources(unchecked, time_limit=room)
         changed = {
-            source_id: status
-            for source_id, status in found.items()
-            if status != "unchecked" and source_id in record.verification
+            source_id: as_result(value)
+            for source_id, value in found.items()
+            if as_result(value).status != "unchecked"
+            and source_id in record.verification
         }
         if not changed:
             return record
@@ -586,6 +617,20 @@ class _Run:
             update={"verification": {**record.verification, **changed}}
         )
         write_record(self.root, name, record)
+        tally = counts([result.status for result in changed.values()])
+        shown = ", ".join(
+            f"{number} {BADGES[status].split(' ', 1)[1]}"
+            for status, number in tally.items()
+            if number and status in STATUSES
+        )
+        self.report(
+            ev.Notice(
+                f"{record.task}: checked {len(changed)} of "
+                f"{len(record.result.sources)} sources: {shown}",
+                level="info",
+                task=record.task,
+            )
+        )
         return record
 
     def _draft(
@@ -614,7 +659,11 @@ class _Run:
         sources: tuple[SourceView, ...] = ()
         if research is not None:
             sources = tuple(
-                SourceView(**source.model_dump(), status=research.status(source.id))
+                SourceView(
+                    **source.model_dump(),
+                    status=research.status(source.id),
+                    detail=research.result_of(source.id).detail,
+                )
                 for source in research.result.sources
             )
             findings = ResearchFindings(
@@ -665,7 +714,7 @@ class _Run:
             assert isinstance(record, DraftResult)
             text = (content or b"").decode("utf-8", errors="replace")
             return run_validators(
-                text, checks_for(task), result=record, sources=research_sources
+                text, task.validators, result=record, sources=research_sources
             )
 
         request = SessionRequest(
@@ -673,7 +722,7 @@ class _Run:
             task=task.id,
             prompt=prompt,
             system_append=writer_system_prompt("draft", self.playbook, brief),
-            model=self._model(task),
+            model=self.model_for(task),
             key=drafted.key,
             estimate_usd=task.budget_usd,
             output=task.output,
@@ -750,11 +799,12 @@ class _Run:
             validators=outcome.validators,
             run_id=self.run_id,
         )
-        if self.state.review is None or self.state.review.run_id != self.run_id:
+        review = self.state.review
+        if review is None or review.run_id != self.run_id or review.reviewed:
             # This run changed an output: its review, summary and render are
             # owed from now on, even if it is interrupted.
             self.state.review = ReviewProgress(run_id=self.run_id)
-        self._save_state()
+        self.save_state()
         failed = [result for result in outcome.validators if not result.ok]
         reason = None
         if failed:
@@ -765,7 +815,7 @@ class _Run:
         self.state.record_failure(
             task.id, material=material, error=error, run_id=self.run_id
         )
-        self._save_state()
+        self.save_state()
         self._finish_task(task.id, "failed", error)
 
     def _finish_task(
@@ -778,45 +828,72 @@ class _Run:
         self.done[task_id] = state
         self.report(ev.TaskFinished(task_id, state, reason, tuple(validators)))
 
-    def _model(self, task: Task) -> str:
+    def model_for(self, task: Task) -> str:
         return self.models.draft if task.tier == "draft" else self.models.review
 
     # After the drafts.
 
-    def _review(self) -> None:
-        """The review loop and the summary (docs/spec/04-engine.md): M4.
-
-        They run when ``state.review`` is set: this run, or an interrupted
-        one, changed an output. The critic reviews the whole pack for
-        ``limits.rounds`` rounds (0 with ``--no-review``), with each invalid
-        task's validator failures added as findings, then the summary
-        session runs within the reserve kept for it. Until then this does
-        nothing, and ``--rounds`` and ``--no-review`` only reach the
-        manifest.
-        """
-
-    def _render(self) -> None:
-        # A person's edits are replaced only by an output this run recorded:
-        # a failed redraft leaves the task pinned and its file untouched.
+    def _replaced(self) -> frozenset[str]:
+        """Pinned tasks whose edits this run replaced: ``--force --only``
+        redrafted them and recorded a new output. A failed redraft leaves
+        the task pinned and its file untouched."""
         redrafted = {
             task_id
             for task_id, state in self.done.items()
             if state in ("fresh", "invalid")
         }
+        return self.planned.replaced & redrafted
+
+    def _pinned(self) -> frozenset[str]:
+        return self.planned.pinned - self._replaced()
+
+    def _review(self) -> None:
+        """The review rounds and the summary, when an output changed."""
+        review = Review(
+            project=self.project,
+            state=self.state,
+            sessions=self.sessions,
+            limits=self.limits,
+            clock=self.clock,
+            report=self.report,
+            run_id=self.run_id,
+            manifest=self.manifest,
+            models=self.models,
+            rounds=self.manifest.limits.rounds,
+            pinned=self._pinned(),
+            save_state=self.save_state,
+            final_states=self.final_states,
+        )
+        review.run()
+        self.summary_error = review.summary_error
+
+    def _render(self) -> None:
+        self.final = self.final_states()
+        executor = self.manifest.executor
         rendered = render_pack(
-            self.root,
-            self.playbook,
+            self.project,
             self.state,
-            replace=self.planned.replaced & redrafted,
+            states=self.final,
+            pinned=self._pinned(),
+            versions={
+                "spadework": __version__,
+                "playbook": f"{self.playbook.name}@{self.playbook.version}",
+                "executor": executor.name
+                if executor.version is None
+                else f"{executor.name}@{executor.version}",
+            },
+            generated_at=utc_timestamp(),
+            save=self.save_state,
+            replace=self._replaced(),
         )
         for message, hint in rendered.warnings:
             self.report(ev.Notice(message, hint))
         self.rendered = rendered.written
         self.state.review = None
-        self._save_state()
+        self.save_state()
 
     def _outcome(self) -> tuple[Outcome, str | None, str | None]:
-        final = self._final_states()
+        final = self.final or self.final_states()
         self.final = final
         unfinished = [
             task_id
@@ -824,6 +901,12 @@ class _Run:
             if state in ("failed", "invalid", "skipped")
         ]
         if not unfinished:
+            if self.summary_error is not None:
+                return (
+                    "partial",
+                    f"the summary failed: {self.summary_error}",
+                    "The next `spadework run` writes it again.",
+                )
             return "complete", None, None
         listed = ", ".join(f"{task_id} ({final[task_id]})" for task_id in unfinished)
         return (
@@ -835,7 +918,7 @@ class _Run:
             "TASK`.",
         )
 
-    def _final_states(self) -> dict[str, str]:
+    def final_states(self) -> dict[str, str]:
         """Each task's state now, planned against inputs/ as it is now.
 
         inputs/ may have changed during the run: a file added, edited or
@@ -856,6 +939,12 @@ class _Run:
             # for the task (pinned): the work asked for was not done.
             if state in ("failed", "skipped"):
                 final[task_id] = state
+        for task_id in self._replaced():
+            # The render replaces the person's edits with this run's output,
+            # so the task is no longer pinned, even before it renders.
+            entry = self.state.tasks.get(task_id)
+            if final.get(task_id) == "pinned" and entry is not None:
+                final[task_id] = entry.status
         return final
 
     def _finished(
@@ -900,7 +989,7 @@ class _Run:
             ).replace(os.sep, "/"),
         )
 
-    def _save_state(self) -> None:
+    def save_state(self) -> None:
         save_state(state_path(self.root), self.state)
 
     def _save_manifest(self) -> None:

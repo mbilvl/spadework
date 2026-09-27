@@ -116,10 +116,27 @@ class Recording:
         return result
 
     def kinds(self) -> list[str]:
-        """Each session as task:kind, in order."""
-        return [f"{s.spec.task}:{s.kind}" for s in self.sessions]
+        """Each session as task:kind, or as its kind for the critic and the
+        summary, in order."""
+        return [
+            s.kind if s.spec.task is None else f"{s.spec.task}:{s.kind}"
+            for s in self.sessions
+        ]
 
-    def of(self, task: str, kind: SessionKind | str) -> list[Session]:
+    def drafting(self) -> list[str]:
+        """The research, draft and repair sessions before the review."""
+        found = []
+        for session, name in zip(self.sessions, self.kinds(), strict=True):
+            if session.kind in ("critic", "fix", "summary"):
+                break
+            found.append(name)
+        return found
+
+    def reviewing(self) -> list[str]:
+        """The sessions from the first critic, fix or summary on."""
+        return self.kinds()[len(self.drafting()) :]
+
+    def of(self, task: str | None, kind: SessionKind | str) -> list[Session]:
         value = kind.value if isinstance(kind, SessionKind) else kind
         return [s for s in self.sessions if s.spec.task == task and s.kind == value]
 
@@ -250,3 +267,24 @@ def task_file(
 def edit_config(root: Path, text: str) -> None:
     config = root / "spadework.toml"
     config.write_text(config.read_text(encoding="utf-8") + "\n" + text + "\n")
+
+
+def leave_dead_lock(root: Path) -> None:
+    """What kill -9 leaves: a lock owned by a process that has gone."""
+    import os
+    import socket
+    import subprocess
+    import sys
+
+    from spadework.lock import LockOwner
+
+    code = "import os; print(os.getpid())"
+    pid = int(
+        subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        ).stdout
+    )
+    lock = root / ".spadework" / "lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_bytes(LockOwner(pid, socket.gethostname(), "x").to_bytes())
+    assert os.path.exists(lock)

@@ -120,7 +120,10 @@ out/
 
 ### Human edits
 
-The engine records a hash of every file it renders into `out/`. If the file's
+The engine records a hash of every file it renders into `out/`, as
+rendered (with its Sources section). The hash of the bytes about to be
+written is saved before writing, so a file holding them is known to be the
+engine's even if the run stopped mid-render. If the file's
 hash no longer matches at the start of a run, the user has edited it, and the
 task becomes **pinned**:
 
@@ -129,7 +132,9 @@ task becomes **pinned**:
 - Critic findings against it are reported in the summary for the human to act on.
 - `spadework run --force --only TASK` regenerates it after a warning.
 
-A deleted file in `out/` is not an edit; the next run renders it again. If
+A deleted file in `out/` is not an edit; the next run renders it again. An
+edited `00-summary.md`, `sources.md` or `pack.json` is left as it is with a
+warning; it pins no task, and it is rendered again once deleted. If
 the engine has no record of a file it is about to overwrite (for example
 after `.spadework/` was removed), it warns rather than overwriting silently.
 

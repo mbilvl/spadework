@@ -450,7 +450,9 @@ def run_command(
     """Run the pipeline. This spends money.
 
     Prints the plan, then runs every task that is pending, stale or failed:
-    research, draft, validators and repair, and renders the pack into out/.
+    research, source verification, draft, validators and repair. Then the
+    critic reviews the pack and fixes follow, for up to --rounds rounds, the
+    summary is written, and the pack is rendered into out/.
     It does not ask first: the budget is the safety net, and `spadework
     check` is the preview. Prints `up to date` when there is nothing to do.
     Exits 4 when tasks failed or are invalid, 5 at the budget or time limit,
@@ -567,6 +569,47 @@ def status(
             ui.json(views.status_document(loaded, current))
         else:
             views.print_status(ui, current)
+
+
+@app.command(
+    epilog=_examples(
+        "spadework verify",
+        "spadework verify -C acme-fabrication --json | jq .counts",
+    )
+)
+def verify(
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print one JSON document instead of the table."),
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Check the quote of every source in the pack again.
+
+    Fetches each source's page and checks that its quote is on it. It sends
+    nothing to a model and spends nothing. Then it updates the research
+    records and renders out/sources.md, out/pack.json, out/00-summary.md and
+    each document's Sources section again; documents you edited are never
+    touched. Exits 0 whatever the checks find, 3 when the project is not
+    valid, and 7 when a run holds the project.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui, json_output=json_output):
+        from spadework import views
+        from spadework.engine.reverify import verify_pack
+
+        report = verify_pack(options.base, progress=None if json_output else ui.info)
+        if json_output:
+            for message, hint in report.warnings:
+                ui.warning(message, hint)
+            ui.json(views.verify_document(report))
+        else:
+            views.print_verify(ui, report)
 
 
 @playbooks_app.command(

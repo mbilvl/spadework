@@ -141,7 +141,8 @@ class ValidateSpec(StrictModel):
     citations_resolve: bool | None = Field(
         default=None,
         description=(
-            "Every [S#] exists in the task's sources. Default: on for research tasks."
+            "Every [S#] exists in the task's sources. A task without research "
+            "may cite none. Default: on."
         ),
     )
     min_sources: int | None = Field(
@@ -665,7 +666,9 @@ def _resolve_validators(
             ENGINE_FORBIDDEN_PHRASES + tuple(setting("forbidden_phrases", None) or ())
         ),
         max_open_questions=setting("max_open_questions", DEFAULT_MAX_OPEN_QUESTIONS),
-        citations_resolve=bool(setting("citations_resolve", has_research)),
+        # On for every task: source ids are local to a task, so one without
+        # research of its own may cite none.
+        citations_resolve=bool(setting("citations_resolve", True)),
         min_sources=setting("min_sources", None) if has_research else None,
     )
 

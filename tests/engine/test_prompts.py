@@ -10,7 +10,6 @@ from spadework.engine import prompts
 from spadework.engine.prompts import (
     ENGINE_PROMPT_VERSION,
     base_prompts,
-    checks_for,
     draft_prompt,
     prompts_dir,
     repair_prompt,
@@ -66,7 +65,15 @@ contacts:
 def test_the_version_is_a_hash_over_every_base_prompt() -> None:
     files = {path.stem: path.read_text() for path in prompts_dir().glob("*.md")}
 
-    assert set(base_prompts()) == {"draft", "repair", "research", "rules"}
+    assert set(base_prompts()) == {
+        "critic",
+        "draft",
+        "fix",
+        "repair",
+        "research",
+        "rules",
+        "summary",
+    }
     assert hash_json(files) == ENGINE_PROMPT_VERSION
     assert ENGINE_PROMPT_VERSION.startswith("sha256:")
 
@@ -172,6 +179,58 @@ def test_writer_system_prompt(make_project: MakeProject) -> None:
     assert "Give every amount" not in draft  # the fixture brief has no currencies
     assert draft.endswith(base_prompts()["draft"].rstrip("\n"))
     assert repair.endswith(base_prompts()["repair"].rstrip("\n"))
+
+
+def test_the_review_base_prompts_carry_their_contracts() -> None:
+    critic = base_prompts()["critic"]
+    fix = base_prompts()["fix"]
+    summary = base_prompts()["summary"]
+
+    # The critic's generic rubric (docs/spec/03-playbooks.md).
+    for kind in ("fabrication", "contradiction", "filler", "length"):
+        assert f"(`{kind}`)" in critic
+    for name in ("Specificity", "Priorities", "Process narration"):
+        assert f"**{name}**" in critic
+    assert "Never ask for facts the pack does not support" in critic
+    assert "Code checks each document's validators" in critic
+    # A fixer may reject a finding if it says why, and never invents facts.
+    assert "You may reject a finding" in fix
+    assert "Never invent names, numbers, prices, dates, quotes or URLs" in fix
+    assert "Never write a rejection, or anything about the review, into the" in fix
+    # The summary's structure.
+    assert "`## Executive summary`: at most 12 bullets" in summary
+    assert "`## Key decisions`: the decisions the pack recommends, each with its\n" in (
+        summary
+    )
+    assert "`## Open questions`: at most 10 questions" in summary
+    assert "Code appends more sections after yours" in summary
+    # No writer adds a Sources section of its own: code renders it.
+    assert "Do not add a Sources section" in base_prompts()["rules"]
+
+
+def test_playbook_appendices_reach_the_critic_and_the_summary(
+    make_project: MakeProject,
+) -> None:
+    from spadework.playbook import builtin_root
+
+    root = make_project()
+    (root / "spadework.toml").write_text(
+        (root / "spadework.toml")
+        .read_text()
+        .replace('"./playbooks/valid"', '"discovery-website"')
+    )
+    project = load_project(root)
+    assert project.playbook.ref.root == builtin_root() / "discovery-website"
+
+    critic = writer_system_prompt("critic", project.playbook, project.brief)
+    summary = writer_system_prompt("summary", project.playbook, project.brief)
+    fix = writer_system_prompt("fix", project.playbook, project.brief)
+
+    assert critic.endswith(project.playbook.prompts["critic"].rstrip("\n"))
+    assert base_prompts()["critic"].rstrip("\n") + "\n\n## Extra tests" in critic
+    assert summary.endswith(project.playbook.prompts["summary"].rstrip("\n"))
+    assert fix.endswith(base_prompts()["fix"].rstrip("\n"))
+    assert "## House style for a website discovery pack" in fix
 
 
 def test_requirements_follow_the_validators(make_project: MakeProject) -> None:
@@ -290,12 +349,11 @@ def test_citations_are_checked_in_tasks_without_research(
     project = load_project(make_project())
     overview = project.playbook.task("overview")
 
-    assert overview.validators.citations_resolve is False
-    assert checks_for(overview).citations_resolve is True
+    assert overview.validators.citations_resolve is True
     assert (
         "- No `[S#]` citations: this document has no sources of its own. Attribute "
         "a fact from another document by its file name."
-    ) in requirements(checks_for(overview), has_research=False)
+    ) in requirements(overview.validators, has_research=False)
 
 
 def test_the_quote_rule_is_in_the_prompt_and_the_schema() -> None:

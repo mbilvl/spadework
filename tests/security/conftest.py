@@ -30,6 +30,9 @@ OUTPUT = "out-café.md"  # NFC, so that the NFD spelling is a different path
 # Stands in for DNS, so the tests never touch the network.
 DNS: dict[str, list[str]] = {
     "example.com": ["93.184.215.14"],
+    "example.org": ["93.184.215.14"],
+    "testing.com": ["93.184.215.14"],
+    "local.com": ["93.184.215.14"],
     "v6.example.com": ["2606:4700::1111"],
     "internal.example.com": ["10.0.0.5"],
     "mixed.example.com": ["93.184.215.14", "127.0.0.1"],

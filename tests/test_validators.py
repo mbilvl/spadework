@@ -418,7 +418,12 @@ def test_with_a_playbook_s_resolved_settings(make_project: MakeProject) -> None:
     }
     plan = project.playbook.task("plan")
     names = [r.name for r in run_validators("x", plan.validators, result=_record())]
-    assert names == ["max_lines", "forbidden_phrases", "max_open_questions"]
+    assert names == [
+        "max_lines",
+        "forbidden_phrases",
+        "max_open_questions",
+        "citations_resolve",
+    ]
 
 
 def test_failures_and_can_repair() -> None:

@@ -21,6 +21,7 @@ COMMANDS = {
     "spadework-check": ["check"],
     "spadework-run": ["run"],
     "spadework-status": ["status"],
+    "spadework-verify": ["verify"],
     "spadework-logs": ["logs"],
     "spadework-doctor": ["doctor"],
     "spadework-playbooks": ["playbooks"],

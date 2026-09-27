@@ -104,7 +104,7 @@
             }
           ],
           "default": null,
-          "description": "Every [S#] exists in the task's sources. Default: on for research tasks.",
+          "description": "Every [S#] exists in the task's sources. A task without research may cite none. Default: on.",
           "title": "Citations Resolve"
         },
         "min_sources": {

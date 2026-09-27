@@ -23,10 +23,9 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import replace
 from functools import cache
 from pathlib import Path
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from spadework.brief import Brief
 from spadework.keys import hash_json
@@ -34,7 +33,12 @@ from spadework.playbook import Playbook, Task, Validators
 from spadework.render import DependencyFacts, ResearchFindings, StagedFile
 from spadework.validators import ValidatorResult
 
-WriterKind = Literal["draft", "repair"]
+if TYPE_CHECKING:
+    from spadework.engine.documents import Document
+    from spadework.state import ReviewFinding
+
+WriterKind = Literal["draft", "repair", "fix", "critic", "summary"]
+"""Every kind of session but research, which sees public data only."""
 
 
 def prompts_dir() -> Path:
@@ -105,11 +109,13 @@ def _count(number: int, one: str, many: str) -> str:
     return f"{number} {one if number == 1 else many}"
 
 
-# Draft and repair sessions: the house rules, the reader, and the task.
+# Every other session: the house rules, the reader, and the kind's prompt.
 
 
 def writer_system_prompt(kind: WriterKind, playbook: Playbook, brief: Brief) -> str:
-    """The house rules, the reader, and the base prompt for ``kind``."""
+    """The house rules, the reader, and the base prompt for ``kind``.
+
+    The critic is told the house rules too: they are what it checks."""
     return "\n\n".join(
         [_prompt("rules", playbook), _reader(brief), _prompt(kind, playbook)]
     )
@@ -127,18 +133,6 @@ def _reader(brief: Brief) -> str:
     if front.currencies:
         lines.append(f"Give every amount of money in {' and '.join(front.currencies)}.")
     return "\n".join(lines)
-
-
-def checks_for(task: Task) -> Validators:
-    """The validators the engine runs on a task's document.
-
-    Source ids are local to a task (docs/spec/06-records.md), so a document
-    without research of its own may cite none: ``citations_resolve`` is on
-    for every task, and with no sources any ``[S#]`` fails it.
-    """
-    if task.validators.citations_resolve:
-        return task.validators
-    return replace(task.validators, citations_resolve=True)
 
 
 def requirements(validators: Validators, *, has_research: bool) -> list[str]:
@@ -197,7 +191,7 @@ def draft_prompt(
     their key facts, which describe the engine's version, are left out.
     """
     parts = [f"# {task.title}", body.strip()]
-    checks = requirements(checks_for(task), has_research=research is not None)
+    checks = requirements(task.validators, has_research=research is not None)
     parts.append("## Checked in code when you finish\n\n" + "\n".join(checks))
     parts.append(_files_section(files, deps, pinned))
     facts = _facts_section([dep for dep in deps if dep.task.id not in pinned])
@@ -331,10 +325,269 @@ def sources_file(research: ResearchFindings) -> str:
             f"- URL: {source.url}\n"
             f"- Publisher: {source.publisher}\n"
             f"- Accessed: {source.accessed}\n"
-            f"- Verification: {source.status}\n"
+            f"- Verification: {source.status}{_detail(source.detail)}\n"
             f"- Claim: {source.claim}\n"
             f"- Quote: {source.quote}"
         )
     if not research.sources:
         blocks.append("The research found no sources.")
     return "\n\n".join(blocks) + "\n"
+
+
+def _detail(detail: str | None) -> str:
+    return f" ({detail})" if detail else ""
+
+
+# The review: the critic, the fixes and the summary.
+
+RECORDS_DIGEST = "records/digest.md"
+"""In a folder, as the research files are, so no task output can collide."""
+
+_STATES = {
+    "fresh": "fresh",
+    "stale": "stale: its inputs changed since it was drafted",
+    "invalid": "invalid: some checks in code fail",
+    "failed": "failed: its last draft failed",
+    "skipped": "skipped in this run",
+    "pending": "never drafted",
+    "pinned": "edited by a person",
+}
+
+
+def _state(document: Document) -> str:
+    text = _STATES.get(document.state, document.state)
+    if document.pinned and document.state != "pinned":
+        text += "; edited by a person"
+    if document.path is None:
+        text += "; there is no document"
+    return text
+
+
+def _listing(files: Sequence[StagedFile], documents: Sequence[Document]) -> str:
+    """The working directory of a review session, one line per file."""
+    by_output = {document.output: document for document in documents}
+    lines = ["## Your working directory", ""]
+    for file in files:
+        what = ""
+        if file.path == "brief.md":
+            what = "the brief"
+        elif file.path.startswith("inputs/"):
+            what = "an input"
+        elif file.path == RECORDS_DIGEST:
+            what = (
+                "what each document's session reported, with its sources and "
+                "their verification status"
+            )
+        elif file.path == RESEARCH_SOURCES:
+            what = "this document's sources, with their quotes and verification status"
+        elif file.path in by_output:
+            document = by_output[file.path]
+            what = f"the {document.task.title} document"
+            if document.pinned:
+                what += ", edited by a person"
+        heading = f' ("{file.heading}")' if file.heading else ""
+        lines.append(f"- `{file.path}`: {what}{heading}")
+    return "\n".join(lines)
+
+
+def _checks(document: Document) -> str:
+    entry = document.entry
+    if document.pinned:
+        return "not checked: edited by a person"
+    if entry is None or entry.output is None:
+        return "—"
+    failed = [result.name for result in entry.validators if not result.ok]
+    return "failed: " + ", ".join(failed) if failed else "pass"
+
+
+def critic_prompt(
+    *,
+    round_: int,
+    rounds: int,
+    documents: Sequence[Document],
+    files: Sequence[StagedFile],
+    priorities: Sequence[str],
+    failures: Sequence[ReviewFinding],
+    max_findings: int,
+) -> str:
+    """The prompt of the critic: the pack, the priorities, and the limits."""
+    table = ["| Document | Title | State |", "|---|---|---|"]
+    for document in documents:
+        table.append(
+            f"| `{document.output}` | {_cell(document.task.title)} | "
+            f"{_state(document)} |"
+        )
+    parts = [
+        f"# Review, round {round_} of {rounds}",
+        "## The pack\n\n" + "\n".join(table),
+    ]
+    if priorities:
+        listed = "\n".join(f"- {priority}" for priority in priorities)
+        parts.append(f"## The brief's priorities\n\n{listed}")
+    else:
+        parts.append("## The brief's priorities\n\nThe brief lists none.")
+    if failures:
+        listed = "\n".join(
+            f"- `{finding.target}`: {finding.instruction}" for finding in failures
+        )
+        parts.append(
+            "## Already found by the checks in code\n\n"
+            "These go to the fixers as findings. Do not repeat them.\n\n" + listed
+        )
+    parts.append(_listing(files, documents))
+    parts.append(
+        "## Your result\n\n"
+        f"At most {max_findings} findings. `target` is one of the documents in "
+        "the table above that has a document. Then return your result."
+    )
+    return "\n\n".join(parts) + "\n"
+
+
+def fix_prompt(
+    task: Task,
+    findings: Sequence[ReviewFinding],
+    *,
+    files: Sequence[StagedFile],
+    has_research: bool,
+) -> str:
+    """The prompt of a fix session: its findings, and the checks it must pass."""
+    listed = "\n".join(
+        f"- **{finding.id}** ({_finding_kind(finding)}, {finding.severity}): "
+        f"{finding.instruction}"
+        for finding in findings
+    )
+    checks = requirements(task.validators, has_research=has_research)
+    staged = [
+        *files,
+        StagedFile(task.output, None),
+    ]
+    listing = _listing(staged, ()).replace(
+        f"- `{task.output}`: ", f"- `{task.output}`: your output, the document to fix"
+    )
+    return (
+        f"# Fix: {task.title}\n\n"
+        f"`{task.output}` holds the document. The review found what follows. "
+        "Carry out each finding, or reject it and say why.\n\n"
+        f"## Findings\n\n{listed}\n\n"
+        "## Checked in code when you finish\n\n" + "\n".join(checks) + "\n\n"
+        f"{listing}\n\n"
+        "## Your output\n\n"
+        f"Edit `{task.output}` in your working directory. It is the only file you "
+        "can write. Then return your result.\n"
+    )
+
+
+def _finding_kind(finding: ReviewFinding) -> str:
+    if finding.origin == "validator":
+        return f"{finding.kind}, from a check in code"
+    return finding.kind
+
+
+SUMMARY_HEADINGS = ("Executive summary", "Key decisions", "Open questions")
+
+
+def summary_prompt(
+    *, title: str, documents: Sequence[Document], files: Sequence[StagedFile]
+) -> str:
+    """The prompt of the summary: every document's state and every question."""
+    table = ["| Document | Title | State | Checks |", "|---|---|---|---|"]
+    questions = []
+    for document in documents:
+        table.append(
+            f"| `{document.output}` | {_cell(document.task.title)} | "
+            f"{_state(document)} | {_checks(document)} |"
+        )
+        if document.record is None:
+            continue
+        for question in document.record.result.open_questions:
+            questions.append(
+                f"- `{document.task.id}:{question.id}` ({document.output}): "
+                f"{question.question} Why: {' '.join(question.why.split())}"
+            )
+    listed = "\n".join(questions) or "The documents raise no open questions."
+    return (
+        f"# Summary: {title}\n\n"
+        "## The documents\n\n" + "\n".join(table) + "\n\n"
+        f"## The pack's open questions\n\n{listed}\n\n"
+        f"{_listing(files, documents)}\n\n"
+        "## Your output\n\n"
+        f"Required headings: {', '.join(SUMMARY_HEADINGS)}\n\n"
+        "Write `00-summary.md` in your working directory. It is the only file you "
+        "can write. Then return your result.\n"
+    )
+
+
+def records_digest(documents: Sequence[Document]) -> str:
+    """``records/digest.md``: what each document's session reported, for the critic
+    and the summary. Source ids belong to their document."""
+    blocks = [
+        "# Records\n\n"
+        "What each document's session reported about it. Source ids belong to "
+        "their own document. For a document a person edited, the record "
+        "describes the version before the edits."
+    ]
+    for document in documents:
+        lines = [f"## {document.output}: {document.task.title}", ""]
+        lines.append(f"- State: {_state(document)}")
+        lines.append(f"- Checks in code: {_checks(document)}")
+        if document.entry is not None:
+            for check in document.entry.validators:
+                if not check.ok and check.message:
+                    lines.append(f"  - `{check.name}`: {check.message}")
+        record = document.record
+        if record is not None:
+            result = record.result
+            lines.append(f"- Summary: {result.summary}")
+            lines += _items("Key facts", result.key_facts)
+            lines += _items(
+                "Decisions",
+                [
+                    f"{d.id}: {d.decision}. Reason: {_flat(d.reason)} "
+                    f"({d.reversibility} to reverse"
+                    + (
+                        f"; rejected: {', '.join(d.alternatives)}"
+                        if d.alternatives
+                        else ""
+                    )
+                    + ")"
+                    for d in result.decisions
+                ],
+            )
+            lines += _items(
+                "Open questions",
+                [
+                    f"{document.task.id}:{q.id}: {q.question} Why: {_flat(q.why)}"
+                    for q in result.open_questions
+                ],
+            )
+            lines += _items("Assumptions", result.assumptions)
+            lines += _items(
+                "Risks",
+                [
+                    f"{r.risk} (likelihood {r.likelihood}, impact {r.impact}). "
+                    f"Mitigation: {_flat(r.mitigation)}"
+                    for r in result.risks
+                ],
+            )
+            lines += _items("Gaps", result.gaps)
+        research = document.research
+        if research is not None:
+            sources = [
+                f"{source.id} [{research.status(source.id)}]: {source.title} "
+                f"({source.publisher}, {source.url}). Claim: {source.claim} "
+                f"Quote: “{source.quote}”"
+                for source in research.result.sources
+            ]
+            lines += _items("Sources", sources)
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) + "\n"
+
+
+def _items(label: str, items: Sequence[str]) -> list[str]:
+    if not items:
+        return [f"- {label}: none"]
+    return [f"- {label}:", *(f"  - {_flat(item)}" for item in items)]
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())

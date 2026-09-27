@@ -3,12 +3,14 @@ Usage: spadework run [OPTIONS]
   Run the pipeline. This spends money.
 
   Prints the plan, then runs every task that is pending, stale or failed:
-  research, draft, validators and repair, and renders the pack into out/. It
-  does not ask first: the budget is the safety net, and `spadework check` is the
-  preview. Prints `up to date` when there is nothing to do. Exits 4 when tasks
-  failed or are invalid, 5 at the budget or time limit, 6 at a rate limit, 7
-  when another run holds the project, and 130 when interrupted. A run that stops
-  can be resumed by running again.
+  research, source verification, draft, validators and repair. Then the critic
+  reviews the pack and fixes follow, for up to --rounds rounds, the summary is
+  written, and the pack is rendered into out/. It does not ask first: the budget
+  is the safety net, and `spadework check` is the preview. Prints `up to date`
+  when there is nothing to do. Exits 4 when tasks failed or are invalid, 5 at
+  the budget or time limit, 6 at a rate limit, 7 when another run holds the
+  project, and 130 when interrupted. A run that stops can be resumed by running
+  again.
 
 Options:
   --only TASK           Run only this task; repeat for more. Dependencies are

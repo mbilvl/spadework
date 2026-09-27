@@ -228,6 +228,32 @@ class TestRedirects:
         assert result.final_url == "https://example.com/"
         assert len(web.requests) == 1
 
+    def test_a_special_use_name_is_blocked_without_a_lookup(
+        self, web: Web, resolver: Resolver, check: Check
+    ) -> None:
+        result = check("https://cms.example/pricing", QUOTE)
+
+        assert result.status == "unreachable"
+        assert result.detail == "blocked: special-use domain"
+        assert result.final_url is None
+        assert resolver.calls == []
+        assert web.requests == []
+
+    def test_a_redirect_to_a_special_use_name_is_blocked(
+        self, web: Web, resolver: Resolver, check: Check
+    ) -> None:
+        web.add("https://example.com/", redirect("https://intranet.local/wiki"))
+
+        result = check("https://example.com/", QUOTE)
+
+        assert result.status == "unreachable"
+        assert result.detail == (
+            "blocked: special-use domain (the page redirects to "
+            "https://intranet.local/wiki)"
+        )
+        assert resolver.calls == ["example.com."]
+        assert len(web.requests) == 1
+
     def test_redirect_to_a_private_address_through_a_public_hop(
         self, web: Web, check: Check
     ) -> None:
@@ -718,7 +744,7 @@ class TestDetailsCarryNoServerText:
         )
 
     def test_a_long_host_is_shortened(self, web: Web, check: Check) -> None:
-        name = ".".join(["a" * 60] * 3) + ".example"
+        name = ".".join(["a" * 60] * 3) + ".example.com"
         detail = check(f"https://{name}/", QUOTE).detail
         assert detail.startswith("network error: could not resolve ")
         assert len(detail) < 100

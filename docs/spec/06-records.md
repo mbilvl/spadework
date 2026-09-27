@@ -134,10 +134,15 @@ to the task questions it merges. `status` is `ok` or `partial`.
 - A claim with no source is written as an inference ("likely", "we estimate")
   or tagged `[unverified]`.
 - When rendering to `out/`, the engine appends a `## Sources` section to each
-  document. It lists only the sources that document cites, each with its
-  title, URL, access date and verification badge. Sources that are not cited
-  stay in `pack.json`.
-- `out/sources.md` lists every source, grouped by document.
+  document: a table of id, source (title linked to its URL, and publisher),
+  access date and verification badge. It lists only the sources that
+  document cites; a document without research, or citing none, says so, and
+  cited ids missing from the research are named. Sources that are not cited
+  stay in `pack.json`. Text from the web or a model is escaped before it is
+  written into Markdown.
+- `out/sources.md` lists every source, grouped by document: its URL,
+  publisher, access date, badge with detail and check time, final URL if
+  different, whether it is cited, and its claim and quote.
 
 ## Verification
 
@@ -165,11 +170,16 @@ involved.
 |---|---|---|
 | `verified` | The quote was found | ✓ verified |
 | `quote_not_found` | The page loaded, but the quote is not in it | ✗ quote not found |
-| `unreachable` | Network error, 4xx or 5xx, a timeout, blocked by the rules of I9, too many redirects or a loop, or not started before the run's time for verification ran out | ? unreachable |
+| `unreachable` | Network error, 4xx or 5xx, a timeout, blocked by the rules of I9 (including special-use names such as `.example`), too many redirects or a loop, or not started before the run's time for verification ran out | ? unreachable |
 | `unsupported` | Not HTML or text (PDF support is **[later]**), needs JavaScript to render, has no visible text, uses an unsupported encoding, is larger than 2 MB with the quote not in the first 2 MB, has more than 4 million characters of text with the quote not in the part read, or took too long to read. Also when the check would prove nothing: the quote appears in the URL (the page may just echo it), a fragment has fewer than 3 words or there are more than 4 fragments, or the page redirected to another site. | ? could not check |
 | `unchecked` | Verification was turned off (`--no-verify` or `[verify] enabled = false`) | ? not checked |
 
-A source is treated as verified only when its status is `verified`. An
+Each result is stored with the research record as `{status, detail,
+checked_at, final_url}`, and drafts receive each source's status and detail.
+In a run, verification gets the time left once a draft could still start
+(`max_time` minus the time used, minus 90 s); with none left, sources stay
+`unchecked`. A source is treated as verified only when its status is
+`verified`. An
 `unchecked` source is checked by the next run that drafts its task with
 verification on.
 
@@ -194,3 +204,15 @@ The whole pack as data, for scripts and for later phases:
   "sources": [{ "id": "stack:S1", "url": "…", "verification": "verified" }]
 }
 ```
+
+| Key | Each entry |
+|---|---|
+| `documents` | `{task, title, file, state, validators_ok, summary, key_facts}`, for every task, in file-name order |
+| `decisions` | `{id, task, decision, reason, reversibility, alternatives}`, with ids like `stack:D1` |
+| `open_questions` | `{id, task, question, why, answer_format}` |
+| `consolidated_questions` | `{question, why, from}`; ids in `from` that name no task question are dropped |
+| `risks` | `{task, risk, likelihood, impact, mitigation}` |
+| `assumptions`, `gaps` | `{task, assumption}`, `{task, gap}` |
+| `sources` | `{id, task, url, title, publisher, accessed, quote, claim, cited, verification, verification_detail, checked_at, final_url}` |
+
+`versions` come from the run that wrote the summary.

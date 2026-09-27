@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import shutil
+import socket
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner, Result
@@ -38,6 +41,30 @@ playbook = "{playbook}"
 
 MakeProject = Callable[..., Path]
 Invoke = Callable[..., Result]
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tests never look a name up in DNS: a test that would (a source URL
+    that is not a special-use name, say) fails instead of reaching the
+    network. IP literals and localhost still resolve, for local servers."""
+    real = socket.getaddrinfo
+
+    def getaddrinfo(host: object, *args: Any, **kwargs: Any) -> Any:
+        name = host.decode() if isinstance(host, bytes) else host
+        if name is None or name == "localhost" or _is_address(str(name)):
+            return real(host, *args, **kwargs)  # type: ignore[arg-type]
+        raise OSError(f"the tests are offline: no DNS lookup for {name!r}")
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+
+
+def _is_address(name: str) -> bool:
+    try:
+        ipaddress.ip_address(name.split("%", 1)[0])
+    except ValueError:
+        return False
+    return True
 
 
 @pytest.fixture(autouse=True)

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Literal
 
 from spadework import __version__
 from spadework.sandbox.guard import DNS_TIMEOUT_S, system_resolve
-from spadework.verify.ssrf import Blocked, Unresolvable, shown, vet
+from spadework.verify.ssrf import SPECIAL_USE, Blocked, Unresolvable, shown, vet
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -189,10 +189,13 @@ class Fetcher:
         try:
             target = vet(url, resolve, self._probe)
         except Blocked as exc:
-            where = f"the page redirects to {shown(url)}, but " if hop else ""
-            raise FetchFailed(
-                "unreachable", f"blocked: {where}{exc.reason}", final_url
-            ) from None
+            if exc.reason == SPECIAL_USE:
+                where = f" (the page redirects to {shown(url)})" if hop else ""
+                detail = f"blocked: {SPECIAL_USE}{where}"
+            else:
+                where = f"the page redirects to {shown(url)}, but " if hop else ""
+                detail = f"blocked: {where}{exc.reason}"
+            raise FetchFailed("unreachable", detail, final_url) from None
         except Unresolvable as exc:
             if deadline.remaining() <= 0:
                 raise FetchFailed(

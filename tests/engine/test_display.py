@@ -295,3 +295,69 @@ def test_a_console_whose_reader_went_away_goes_quiet() -> None:
     console.print("and still")
 
     assert console.quiet
+
+
+CRITIC = ev.SessionStarted(
+    n=5,
+    task=None,
+    kind="critic",
+    model="opus",
+    round=1,
+    attempt=1,
+    max_budget_usd=1.5,
+    timeout_s=1500,
+)
+
+
+def test_review_sessions_are_named_by_their_kind_with_their_round() -> None:
+    ui, _, err = ui_with_buffers()
+    display = LinesDisplay(ui)
+
+    for event in [
+        STARTED,
+        CRITIC,
+        ev.ToolUsed(5, None, "critic", "Read", "01-scope.md"),
+        ev.ToolDenied(5, None, "critic", "Write", "x.md", "not allowed", False),
+        ev.SessionFinished(5, None, "critic", "ok", 0.06, 1, 1, 0.5),
+        ev.SessionStarted(6, "scope", "fix", "sonnet", 1, 1, 0.75, 1500),
+        ev.TaskFinished("scope", "fresh"),
+    ]:
+        display(event)
+
+    lines = [line[9:] for line in err.getvalue().splitlines()]
+    assert lines[1:] == [
+        "critic: started (opus, cap $1.50, timeout 25m, round 1)",
+        "critic: Read 01-scope.md",
+        "warning: critic: the sandbox blocked Write x.md: not allowed",
+        "critic: ok, $0.06, 0m01s (spent $0.50 of $6.00)",
+        "scope fix: started (sonnet, cap $0.75, timeout 25m, round 1)",
+        "scope: fresh",
+    ]
+
+
+def test_the_live_view_shows_the_round_and_the_review_sessions() -> None:
+    progress = _Progress()
+    for event in [
+        STARTED,
+        ev.SessionStarted(1, "scope", "draft", "sonnet", 0, 1, 1.5, 1500),
+        ev.SessionFinished(1, "scope", "draft", "ok", 0.21, 72, 0, 0.21),
+        ev.TaskFinished("scope", "fresh"),
+        CRITIC,
+        ev.SessionFinished(5, None, "critic", "ok", 0.06, 30, 0, 0.27),
+        ev.SessionStarted(6, "scope", "fix", "sonnet", 1, 1, 0.75, 1500),
+        ev.SessionFinished(6, "scope", "fix", "error", 0.04, 5, 0, 0.31, "bad"),
+        ev.SessionStarted(7, None, "summary", "opus", 0, 1, 0.75, 1500),
+    ]:
+        progress.update(event)
+    console = Console(width=140, record=True, no_color=True)
+
+    console.print(LiveView(progress))
+
+    lines = [line.rstrip() for line in console.export_text().splitlines()]
+    assert lines[0] == (
+        "spadework · acme-fabrication · discovery-website 0.1.0 · round 1/2"
+    )
+    # A failed fix leaves the task as it was.
+    assert re.fullmatch(r"✓  scope\s+fix\s+sonnet\s+\$0\.25\s+1m17s", lines[2])
+    assert re.fullmatch(r"✓  critic\s+critic\s+opus\s+\$0\.06\s+0m30s", lines[5])
+    assert re.fullmatch(r"▸  summary\s+summary\s+opus\s+\$0\.00\s+0m\d\ds", lines[6])

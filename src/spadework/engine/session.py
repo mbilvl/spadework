@@ -26,8 +26,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import time
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -47,9 +47,15 @@ from spadework.executors.base import (
     SessionSpec,
     ToolCall,
 )
-from spadework.manifest import Outcome, RunManifest, SessionEntry, session_log
+from spadework.manifest import (
+    Outcome,
+    RejectedFinding,
+    RunManifest,
+    SessionEntry,
+    session_log,
+)
 from spadework.manifest import Usage as ManifestUsage
-from spadework.records import Record, output_schema, validate_result
+from spadework.records import FixResult, Record, output_schema, validate_result
 from spadework.sandbox.staging import Staging, StagingError
 from spadework.sandbox.tools import TOOLS_BY_KIND
 from spadework.validators import ValidatorResult
@@ -139,6 +145,27 @@ class RunLimits:
         """What sessions other than the summary may still spend."""
         return self.budget_usd - self.spent_usd - self.reserve_usd
 
+    def time_left(self, now: float) -> float:
+        return self.deadline - now
+
+    def room(self, estimate_usd: float, sessions: int, now: float) -> str | None:
+        """Why ``sessions`` more sessions costing ``estimate_usd`` in all
+        cannot start now, or None when they can. Neither the summary's
+        reserve nor the time a session needs to start is counted as left."""
+        left = self.budget_left()
+        if estimate_usd > left + _EPSILON:
+            return (
+                f"the budget left (${max(left, 0.0):.2f}, with "
+                f"${self.reserve_usd:.2f} kept for the summary) cannot cover "
+                f"${estimate_usd:.2f}"
+            )
+        seconds = self.time_left(now) - TIME_MARGIN_S
+        if seconds < sessions * MIN_SESSION_S:
+            return (
+                f"the time left ({format_duration(max(int(seconds), 0))}) is too short"
+            )
+        return None
+
 
 @dataclass(frozen=True)
 class Staged:
@@ -155,21 +182,38 @@ Check = Callable[[Record, bytes | None], list[ValidatorResult]]
 @dataclass(frozen=True)
 class SessionRequest:
     kind: SessionKind
-    task: str
+    task: str | None
+    """None for the critic and the summary, which work on the whole pack."""
     prompt: str
     system_append: str
     model: str
-    key: str
-    """For the manifest: the research key, or the draft key."""
+    key: str | None
+    """For the manifest: the research key, the draft key of the task's
+    output, or None for the critic and the summary."""
     estimate_usd: float
     output: str | None = None
     files: tuple[Staged, ...] = ()
     seed: bytes | None = None
-    """The output's starting content, as for a repair."""
+    """The output's starting content, as for a repair or a fix."""
     max_searches: int | None = None
     max_fetches: int | None = None
     check: Check | None = None
     """Runs the validators on an accepted result, for the manifest."""
+    round: int = 0
+    """The review round, for the manifest; 0 outside the review."""
+    max_findings: int | None = None
+    """For the critic: the playbook's cap on findings."""
+    findings: Mapping[str, str] = field(default_factory=dict)
+    """For a fix: each finding's instruction, by id, for the manifest's
+    record of the findings the fixer rejected."""
+    use_reserve: bool = False
+    """For the summary: it may spend the reserve kept back for it."""
+
+    @property
+    def what(self) -> str:
+        """How messages name the session, such as "stack draft" or "critic"."""
+        kind = self.kind.value
+        return kind if self.task is None else f"{self.task} {kind}"
 
 
 @dataclass(frozen=True)
@@ -181,6 +225,8 @@ class SessionOutcome:
     content: bytes | None = None
     validators: tuple[ValidatorResult, ...] = ()
     error: str | None = None
+    guard_denials: int = 0
+    """Calls the sandbox denied in the attempt that succeeded."""
 
     @property
     def ok(self) -> bool:
@@ -236,7 +282,13 @@ class SessionRunner:
             )
             verdict = ran.verdict
             if verdict.accepted:
-                return SessionOutcome(ran.n, ran.record, ran.content, ran.validators)
+                return SessionOutcome(
+                    ran.n,
+                    ran.record,
+                    ran.content,
+                    ran.validators,
+                    guard_denials=ran.guard_denials,
+                )
             if verdict.retry == "schema" and retries.schema:
                 schema += 1
                 prompt = retry_prompt(request.prompt, verdict.problem)
@@ -271,7 +323,8 @@ class SessionRunner:
         cap, cap_limited = self._cap(request)
         n = self.manifest.next_session()
         kind = request.kind
-        session_id = f"{n:03d}-{request.task}-{kind.value}"
+        name = kind.value if request.task is None else f"{request.task}-{kind.value}"
+        session_id = f"{n:03d}-{name}"
         log = session_log(n, kind.value, request.task)
         try:
             staging = self._stage(request, session_id, timeout)
@@ -288,7 +341,9 @@ class SessionRunner:
                 tools=TOOLS_BY_KIND[kind.value],
                 workdir=staging.paths.workdir,
                 policy_path=staging.paths.policy,
-                output_schema=output_schema(kind.value),
+                output_schema=output_schema(
+                    kind.value, max_findings=request.max_findings
+                ),
                 max_budget_usd=cap,
                 timeout_s=timeout,
                 log_path=self.run_dir / log,
@@ -301,7 +356,7 @@ class SessionRunner:
                     task=request.task,
                     kind=kind.value,
                     model=request.model,
-                    round=0,
+                    round=request.round,
                     attempt=attempt,
                     max_budget_usd=cap,
                     timeout_s=timeout,
@@ -330,7 +385,7 @@ class SessionRunner:
         if collected.extras:
             self.report(
                 ev.Notice(
-                    f"{request.task} {kind.value}: ignored "
+                    f"{request.what}: ignored "
                     f"{_files(len(collected.extras))} the session wrote besides its "
                     f"output: {', '.join(collected.extras[:5])}",
                     task=request.task,
@@ -356,7 +411,7 @@ class SessionRunner:
             n=n,
             task=request.task,
             kind=kind.value,
-            round=0,
+            round=request.round,
             model=request.model,
             key=request.key,
             status=status,
@@ -371,6 +426,7 @@ class SessionRunner:
             tool_calls=tool_calls,
             guard_denials=denied,
             validators=validators,
+            rejected_findings=_rejected(record, request.findings),
             log=log,
             error=error,
         )
@@ -406,7 +462,7 @@ class SessionRunner:
         )
         if verdict.stop is not None:
             raise verdict.stop
-        return _Ran(n, verdict, record, collected.content, tuple(validators))
+        return _Ran(n, verdict, record, collected.content, tuple(validators), denied)
 
     def _stage(self, request: SessionRequest, session_id: str, timeout: int) -> Staging:
         staging = Staging.create(
@@ -476,7 +532,7 @@ class SessionRunner:
                 n=n,
                 task=request.task,
                 kind=request.kind.value,
-                round=0,
+                round=request.round,
                 model=request.model,
                 key=request.key,
                 status="interrupted" if interrupted else "error",
@@ -497,7 +553,11 @@ class SessionRunner:
         if result.structured is None:
             return None, "the session ended without a structured result"
         try:
-            record = validate_result(request.kind.value, result.structured)
+            record = validate_result(
+                request.kind.value,
+                result.structured,
+                max_findings=request.max_findings,
+            )
         except ValidationError as exc:
             return None, f"its result does not match the schema: {_first_error(exc)}"
         if request.output is not None and content is None:
@@ -514,7 +574,7 @@ class SessionRunner:
         cap_limited: bool,
         time_limited: bool,
     ) -> _Verdict:
-        what = f"{request.task} {request.kind.value}"
+        what = request.what
         if result.status == "ok":
             if problem is None:
                 return _Verdict(accepted=True)
@@ -583,15 +643,20 @@ class SessionRunner:
     def _cap(self, request: SessionRequest) -> tuple[float, bool]:
         """The session's budget cap, and whether the run's budget limited it."""
         left = self.limits.budget_left()
+        if request.use_reserve:
+            left += self.limits.reserve_usd
         estimate = request.estimate_usd
         # That is, the budget cannot cover spent + estimate + the reserve.
         if estimate > left + _EPSILON:
+            kept = (
+                ""
+                if request.use_reserve
+                else f", with ${self.limits.reserve_usd:.2f} kept for the summary"
+            )
             raise RunStopped(
                 "budget",
                 f"the run budget (${self.limits.budget_usd:.2f}) cannot cover the "
-                f"next session: {request.task} {request.kind.value}, estimated at "
-                f"${estimate:.2f}, with ${self.limits.reserve_usd:.2f} kept for the "
-                "summary",
+                f"next session: {request.what}, estimated at ${estimate:.2f}{kept}",
                 f"{RESUME} Raise --budget-usd or limits.budget_usd to go further.",
             )
         cap = min(CAP_FACTOR * estimate, left)
@@ -671,6 +736,23 @@ class _Ran:
     record: Record | None = None
     content: bytes | None = None
     validators: tuple[ValidatorResult, ...] = ()
+    guard_denials: int = 0
+
+
+def _rejected(
+    record: Record | None, findings: Mapping[str, str]
+) -> list[RejectedFinding]:
+    """The findings a fixer rejected, for the manifest (never the document)."""
+    if not isinstance(record, FixResult):
+        return []
+    return [
+        RejectedFinding(
+            finding=rejection.finding,
+            reason=rejection.reason,
+            instruction=findings.get(rejection.finding),
+        )
+        for rejection in record.rejected
+    ]
 
 
 def _first_error(exc: ValidationError) -> str:

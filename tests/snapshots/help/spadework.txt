@@ -15,6 +15,7 @@ Commands:
   check      Validate the project and print the plan.
   run        Run the pipeline.
   status     Show task states and the last run.
+  verify     Check the quote of every source in the pack again.
   logs       Show session traces.
   doctor     Check the environment spadework runs in.
   playbooks  List or show the built-in and local playbooks.
