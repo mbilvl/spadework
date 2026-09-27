@@ -35,6 +35,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any
@@ -51,13 +52,17 @@ from spadework.sandbox.policy import (
 from spadework.sandbox.tools import KNOWN_TOOLS, STRUCTURED_OUTPUT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Mapping
     from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 
-    # Resolves a host name to its IP addresses, or raises OSError.
-    Resolver = Callable[[str], Sequence[str]]
     # Checks one tool's arguments. Returns a WebFetch host still to resolve.
     Check = Callable[[dict[str, Any], Policy], str | None]
+    # The source address this machine would use to reach an address, or None.
+    Probe = Callable[[IPv4Address | IPv6Address], IPv4Address | IPv6Address | None]
+
+# Resolves a host name to its IP addresses, or raises OSError. Defined at run
+# time so other modules can import it; `typing` loads collections.abc anyway.
+Resolver = Callable[[str], Sequence[str]]
 
 PREFIX = "spadework: "
 ALLOWED = PREFIX + "allowed by the session policy"
@@ -449,6 +454,12 @@ def _checked_url(raw: object) -> str | None:
     if address is not None:
         _require_public([address])
         return None
+    if "." not in name:
+        # A single label is looked up in the DNS search domains, so it names
+        # a machine on the local network.
+        raise _Denied(
+            "WebFetch: the host must be a full domain name, such as example.com."
+        )
     return name
 
 
@@ -472,7 +483,11 @@ def _ip(value: str) -> IPv4Address | IPv6Address:
 
 
 def _require_public(addresses: Sequence[IPv4Address | IPv6Address]) -> None:
-    if not addresses or not all(is_public_address(address) for address in addresses):
+    if (
+        not addresses
+        or not all(is_public_address(address) for address in addresses)
+        or any(is_own_network(address) for address in addresses)
+    ):
         raise _Denied("WebFetch cannot fetch local or private network addresses.")
 
 
@@ -483,6 +498,7 @@ def _require_public(addresses: Sequence[IPv4Address | IPv6Address]) -> None:
 # `ipaddress.is_global` does not.
 _SPECIAL_IPV4 = (
     "0.0.0.0/8",  # "this network"
+    "168.63.129.16/32",  # Azure WireServer, reachable from every Azure VM
     "10.0.0.0/8",  # private use
     "100.64.0.0/10",  # shared address space (carrier-grade NAT)
     "127.0.0.0/8",  # loopback
@@ -556,6 +572,46 @@ def is_public_address(address: IPv4Address | IPv6Address) -> bool:
 _is_public = is_public_address
 
 
+def local_address_for(
+    address: IPv4Address | IPv6Address,
+) -> IPv4Address | IPv6Address | None:
+    """The source address this machine would use to reach `address`, or None.
+
+    Connecting a UDP socket sends no packet: the kernel only picks a route.
+    """
+    import socket
+    from ipaddress import ip_address
+
+    family = socket.AF_INET if address.version == 4 else socket.AF_INET6
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as probe:
+            probe.connect((str(address), 9))
+            local = str(probe.getsockname()[0])
+        return ip_address(local.split("%", 1)[0])
+    except (OSError, ValueError):
+        return None
+
+
+def is_own_network(
+    address: IPv4Address | IPv6Address, probe: Probe | None = None
+) -> bool:
+    """Whether a public address leads back to this machine: it is the source
+    address the machine would use to reach it, or, for IPv6, in that
+    address's /64, the machine's own network. False when the probe fails."""
+    from ipaddress import IPv6Address, IPv6Network
+
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    local = (probe or local_address_for)(address)
+    if isinstance(local, IPv6Address) and local.ipv4_mapped is not None:
+        local = local.ipv4_mapped
+    if local is None:
+        return False
+    if isinstance(address, IPv6Address) and isinstance(local, IPv6Address):
+        return address in IPv6Network((local, 64), strict=False)
+    return address == local
+
+
 def _whatwg_ipv4(host: str) -> IPv4Address | None:
     """The IPv4 address a host means to a WHATWG URL parser, or None.
 
@@ -578,6 +634,16 @@ def _whatwg_ipv4(host: str) -> IPv4Address | None:
     for index, value in enumerate(head):
         tail += value << (8 * (3 - index))
     return IPv4Address(tail)
+
+
+def whatwg_ipv4(host: str) -> IPv4Address | None:
+    """`_whatwg_ipv4` for other modules: a lower-case ASCII host's IPv4
+    address, or None for a name. Raises ValueError for a numeric host that is
+    not a valid address, such as `1.2.3.4.5` or `example.123`."""
+    try:
+        return _whatwg_ipv4(host)
+    except _Denied:
+        raise ValueError("the host is not a valid IP address") from None
 
 
 def _number(label: str) -> int | None:

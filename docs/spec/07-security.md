@@ -82,7 +82,8 @@ This breaks the "lethal trifecta" of private data, untrusted content and an
 outbound channel in the same session.
 
 - **Research sessions** see only `public_context` and the research
-  questions. They run in an empty directory under the OS temporary
+  questions, plus the call limits and today's date: not the task title, the
+  reader, or the house rules. They run in an empty directory under the OS temporary
   directory, because the CLI tells the model its working directory, and a
   project path can name the client. The settings file also turns off the
   git status and memory blocks that the CLI would otherwise inject
@@ -119,23 +120,36 @@ folder must not be inside the playbook folder, so a template cannot include
 
 ### I9. Verification fetches cannot reach private networks
 
-The verifier allows only `http` and `https`. It resolves DNS itself and
-refuses loopback, private, link-local, multicast and reserved addresses. It
-repeats that check on **every** redirect, with at most 5 redirects. It does
-not send credentials in the URL, cookies or auth headers. It caps responses
-at 2 MB and 10 s, and it identifies itself as `spadework/<version>`.
+The verifier allows only `http` and `https` URLs without credentials, and
+refuses single-label host names. It resolves the name as an absolute name
+(so DNS search domains never apply), and every address must pass the
+guard's public-address rules (see "The guard"). It then connects only to an address it checked,
+sending the name in `Host` and in TLS SNI, so DNS rebinding cannot move the
+connection. The full check repeats on **every** redirect, with at most 5
+redirects, and loops are stopped. It sends only `User-Agent:
+spadework/<version>`, `Accept`, `Accept-Encoding: gzip, deflate` and
+`Connection: close`: no cookies, credentials or auth headers, and no proxy or
+netrc settings from the environment. It reads at most 2 MB, counted on the
+wire and after decompression, and each page has 10 s in total, including
+every DNS lookup and redirect. It reads the page in a separate process with
+its own 10 s limit and a CPU limit, so a hostile page cannot stall the run.
+Status details never repeat text from the server.
 
 ### I10. spadework itself writes only inside the project
 
 The only exceptions are the user's Claude Code installation, which manages
 its own files under `~/.claude` (kept to a minimum by
-`--no-session-persistence`), and the OS temporary directory, where research
-sessions are staged in `spadework-*` folders that are removed afterwards.
+`--no-session-persistence`, though it still keeps its own configuration
+files and a short-lived socket in the temporary directory), and the OS
+temporary directory, where research sessions and `doctor --canary` are
+staged in `spadework-*` folders that are removed afterwards.
 
 ### I11. Denials are visible
 
 Every guard denial is logged with the tool call that triggered it, counted
-in the manifest (`guard_denials`), and shown in the live view. A research
+in the manifest (`guard_denials`), and shown in the live view. Calls that
+Claude Code refuses before the guard sees them (see [05](05-executors.md))
+are blocked too, but are not counted as denials. A research
 session with denials is flagged in the summary as *possible prompt injection
 encountered*.
 
@@ -202,7 +216,11 @@ allow. A call over its cap therefore never causes a DNS lookup, and a
   IPv4-mapped and NAT64 forms. An address is public only if it lies outside
   every block in the IANA special-purpose address registries and outside
   multicast; for IPv6, only `2000::/3` can be public. This is an explicit
-  list, so the answer is the same on every supported Python version.
+  list, so the answer is the same on every supported Python version. Some
+  addresses that look public are local too: the Azure WireServer address
+  `168.63.129.16` is denied, single-label host names are refused, and an
+  address equal to the machine's own source address for that destination
+  (or, for IPv6, in the same /64) is denied.
 - `StructuredOutput`, the tool that returns the session's result, is on every
   allowlist and is never counted or capped, so a session that has used up its
   tool calls can still report.
@@ -229,7 +247,9 @@ standard library, starts fast, and is easy to audit.
 | Search queries reveal terms taken from `public_context` to the search provider | Inherent to web research | Accepted |
 | A Claude Code bug weakens `--tools` or the hook | Several layers; `doctor --canary` checks live that a read outside the workdir and a write to a second file are both denied | Monitored |
 | If the guard is not running, the CLI still allows Read, Glob and Grep inside the working directory | Restricted mode confines them; the executor's liveness checks kill a session whose guard did not start or did not answer | Reduced |
-| DNS rebinding: a name resolves to a public address for the guard and to a private one when the CLI fetches it | Closing it needs the fetcher to pin the address (a future executor with its own web tools) or OS-level egress rules | Accepted for v0 |
+| DNS rebinding: a name resolves to a public address for the guard and to a private one when the CLI's WebFetch fetches it | Closing it needs the fetcher to pin the address (a future executor with its own web tools) or OS-level egress rules. spadework's own verifier pins the address, so it is not affected. | Accepted for v0 |
+| The verifier's page-reading process has a memory limit only where the OS enforces `RLIMIT_AS` (Linux); a 2 MB page can peak at about 200 MiB | The input is capped at 2 MB and the text at 4 million characters | Accepted |
+| Organisations whose internal networks use public address space | Beyond the own-address checks, spadework cannot tell these apart from the internet. A user-configurable deny list is **[later]**. | Accepted |
 | A research session leaks what it knows through search queries or URLs to public hosts | It knows only `public_context` (I5) | Accepted |
 | Managed (enterprise) Claude Code settings could disable hooks | `dontAsk` mode denies every call the guard didn't approve; the liveness checks fail the session | Reduced |
 | A new CLI version adds tool arguments the guard doesn't know, and calls start being denied | The guard fails closed; `doctor --canary` and the minimum tested version catch it | Accepted |

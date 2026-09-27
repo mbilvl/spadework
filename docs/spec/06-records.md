@@ -26,7 +26,7 @@ the validation error. If it fails again, the session is `failed`.
       "title": "Pricing | ExampleCMS",
       "publisher": "ExampleCMS",
       "accessed": "2026-09-27",
-      "quote": "Free plan … up to 20 editors … 10,000 documents",
+      "quote": "The Free plan includes up to 20 editors … and up to 10,000 documents",
       "claim": "ExampleCMS's free plan allows 20 editors and 10k documents"
     }
   ],
@@ -35,8 +35,9 @@ the validation error. If it fails again, the session is `failed`.
 }
 ```
 
-- `quote` is a **verbatim** excerpt from the page of at most 300 characters,
-  with `…` allowed between fragments. It is what verification checks.
+- `quote` is a **verbatim** excerpt from the page of at most 300 characters.
+  `…` may join up to 4 fragments of at least 3 words each, in page order. It
+  is what verification checks.
 - At most 30 sources per session.
 - `unanswered` feeds into the draft's gaps. An honest "could not find" is a
   valid result.
@@ -144,18 +145,31 @@ involved.
 
 1. Fetch the URL. HTTP(S) only, with the safety rules from
    [07](07-security.md#i9-verification-fetches-cannot-reach-private-networks).
-2. Extract the visible text: drop `script`, `style` and `nav`, and collapse
+2. Extract the visible text: drop `head`, `script`, `style`, `nav`,
+   `noscript`, `template`, `svg` and other content browsers don't show,
+   including elements marked `hidden` or styled `display: none`, closed
+   dialogs, and fallback content inside media elements; decode entities;
+   separate block elements with a space; and collapse whitespace. Only
+   character encodings from the WHATWG Encoding Standard are honoured. This
+   step runs in a separate process with a hard time limit, so a hostile page
+   cannot stall a run.
+3. Normalise both texts: unify typographic quotes and dashes, Unicode NFKC,
+   casefold, drop soft hyphens and zero-width characters, and collapse
    whitespace.
-3. Normalise both texts: Unicode NFKC, casefold, unify quotes and dashes,
-   and collapse whitespace.
-4. Check that each fragment of the quote (split on `…`) appears in order.
+4. Split the quote into fragments on `…`, `...` or `[…]`. Each fragment must
+   appear after the previous one. There is no fuzzy matching.
 
 | Status | Meaning | Badge |
 |---|---|---|
 | `verified` | The quote was found | ✓ verified |
 | `quote_not_found` | The page loaded, but the quote is not in it | ✗ quote not found |
-| `unreachable` | Network error, 4xx or 5xx, or a timeout | ? unreachable |
-| `unsupported` | Not HTML or text (PDF support is **[later]**), or needs JavaScript to render | ? could not check |
+| `unreachable` | Network error, 4xx or 5xx, a timeout, blocked by the rules of I9, too many redirects or a loop, or not started before the run's time for verification ran out | ? unreachable |
+| `unsupported` | Not HTML or text (PDF support is **[later]**), needs JavaScript to render, has no visible text, uses an unsupported encoding, is larger than 2 MB with the quote not in the first 2 MB, has more than 4 million characters of text with the quote not in the part read, or took too long to read. Also when the check would prove nothing: the quote appears in the URL (the page may just echo it), a fragment has fewer than 3 words or there are more than 4 fragments, or the page redirected to another site. | ? could not check |
+| `unchecked` | Verification was turned off (`--no-verify` or `[verify] enabled = false`) | ? not checked |
+
+A source is treated as verified only when its status is `verified`. An
+`unchecked` source is checked by the next run that drafts its task with
+verification on.
 
 The draft session receives each source together with its status. Its rule is
 that claims resting only on sources that are not `verified` must be tagged
