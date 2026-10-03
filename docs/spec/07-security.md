@@ -1,6 +1,6 @@
 # 07 — Security
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 spadework runs AI sessions unattended, and some of them read untrusted web
 content. The design assumes that **any web page may contain instructions

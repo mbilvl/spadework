@@ -7,14 +7,14 @@ invariants spadework keeps, and the risks it accepts.
 
 ## Supported versions
 
-spadework has not been released yet. Once it has, security fixes go into
-the latest release only.
+Security fixes go into the latest release only.
 
 ## Reporting a vulnerability
 
-Report vulnerabilities privately through GitHub Security Advisories: on the
-repository's **Security** tab, choose **Report a vulnerability**. Don't open
-a public issue, pull request, or discussion.
+Report vulnerabilities privately through GitHub Security Advisories:
+[report a vulnerability](https://github.com/mbilvl/spadework/security/advisories/new),
+or choose **Report a vulnerability** on the repository's **Security** tab.
+Don't open a public issue, pull request, or discussion.
 
 Please include:
 

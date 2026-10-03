@@ -1,6 +1,6 @@
 # 04 — Engine
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 The engine turns a project and a playbook into a pack. It is a small,
 deterministic orchestrator: a dependency sort, a cache, and a review loop

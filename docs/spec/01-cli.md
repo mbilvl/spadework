@@ -1,6 +1,6 @@
 # 01 — CLI
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 The CLI is the product. It follows the [Command Line Interface
 Guidelines](https://clig.dev/): output is for humans first, JSON is available

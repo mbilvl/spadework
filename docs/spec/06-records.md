@@ -1,6 +1,6 @@
 # 06 — Records, sources and verification
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 Every session ends with a **structured result**, which is JSON enforced by a
 schema. Documents are for people to read. Records are for the engine, for

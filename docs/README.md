@@ -8,7 +8,7 @@ open, for users and contributors, and it moves with the code.
 | [`spec/`](spec/) | **What** spadework does and **how** | Normative. Describes current behaviour plus the behaviour targeted by the next release. A pull request that changes behaviour updates the spec in the same pull request. |
 | [`decisions/`](decisions/) | **Why** it is built this way | Architecture Decision Records (ADRs). Immutable once accepted. To change a decision, write a new ADR that supersedes the old one. |
 | [`roadmap.md`](roadmap.md) | **What's next** | Milestones and their acceptance criteria. Once the project has GitHub milestones, this file stays high-level and links to them. |
-| `guides/` *(from 0.1.0)* | **How do I…** | User-facing tutorials: getting started, writing a playbook. |
+| [`guides/`](guides/getting-started.md) | **How do I…** | User-facing tutorials: [getting started](guides/getting-started.md), [writing a playbook](guides/writing-a-playbook.md). |
 
 ## Spec conventions
 

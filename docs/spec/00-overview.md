@@ -1,6 +1,6 @@
 # 00 — Overview
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 spadework is a command-line tool that does the desk research for a project
 that is in discovery. You write a short brief. spadework runs a *playbook* of

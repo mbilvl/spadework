@@ -108,11 +108,13 @@ stale, with the reason shown in `check`; hitting the budget exits with code
 
 ## M4 — Review loop, summary, rendering · M
 
-- [ ] Critic and fix sessions with their schemas; validator failures added
+- [x] Critic and fix sessions with their schemas; validator failures added
       as findings; rejected findings recorded in the manifest
-- [ ] The summary session plus the code-rendered status table and footer
-- [ ] Rendering to `out/`: a `## Sources` section per document,
+- [x] The summary session plus the code-rendered status table and footer
+- [x] Rendering to `out/`: a `## Sources` section per document,
       `sources.md`, and `pack.json`
+
+*Status: built and verified with the fake executor. A real `discovery-website` run within the default budget is still to be done with a signed-in Claude Code.*
 
 **Done when** a `discovery-website` run on the example project produces a
 complete pack within the default $6 budget; the critic's verdict ends the
@@ -120,12 +122,14 @@ loop; no document breaks its validators without being reported.
 
 ## M5 — Source verification · M
 
-- [ ] An httpx verifier with SSRF protections: DNS checked on every
+- [x] An httpx verifier with SSRF protections: DNS checked on every
       redirect, size and time caps, and no credentials sent
-- [ ] Automatic verification between research and draft; `spadework verify`;
+- [x] Automatic verification between research and draft; `spadework verify`;
       badges in the documents; counts in the summary
-- [ ] Writers are told each source's verification status, and must tag
+- [x] Writers are told each source's verification status, and must tag
       claims that rest only on sources that aren't verified
+
+*Status: built. The SSRF tests pass, and a planted fake quote is reported as `quote_not_found`.*
 
 **Done when** the SSRF tests pass (private IPs, redirects to private IPs,
 non-HTTP schemes, oversized responses); verification statuses appear in
@@ -133,8 +137,8 @@ the pack; a planted fake quote is reported as `quote_not_found`.
 
 ## Release 0.1.0 · S
 
-- [ ] `docs/guides/`: getting started, and writing a playbook
-- [ ] Every spec status updated to `Implemented (v0.1)`; the CHANGELOG
+- [x] `docs/guides/`: getting started, and writing a playbook
+- [x] Every spec status updated to `Implemented (v0.1)`; the CHANGELOG
 - [ ] Publish to PyPI through GitHub Actions trusted publishing (OIDC, no
       stored tokens), with build attestations
 - [ ] Dogfood: run a real, private project through spadework and compare it
@@ -167,8 +171,8 @@ following the README alone.
 
 | # | Question | Resolve by |
 |---|---|---|
-| 1 | Which flag set is strictest while still unattended (`--restricted`, and the permission mode)? | M2 spike |
+| 1 | Which flag set is strictest while still unattended (`--restricted`, and the permission mode)? | Resolved in M2: `--restricted` with `dontAsk` ([05](spec/05-executors.md)) |
 | 2 | Should inputs marked `public: true` be allowed into research sessions? | M3, after dogfooding |
-| 3 | How far should the summary be written by code rather than by the model? | M4 |
-| 4 | Is 300 characters the right quote length, and do we need fuzzy matching beyond ordered fragments? | M5, using real pages |
+| 3 | How far should the summary be written by code rather than by the model? | Resolved in M4: the model writes the prose; code writes the tables and the footer ([04](spec/04-engine.md#summary)) |
+| 4 | Is 300 characters the right quote length, and do we need fuzzy matching beyond ordered fragments? | After v0, using real pages. v0 has no fuzzy matching, and quotes need fragments of at least 3 words. |
 | 5 | How should packs be written in a language other than English? `language` exists, but the prompts are English. | After v0 |

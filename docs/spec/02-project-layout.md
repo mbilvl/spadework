@@ -1,6 +1,6 @@
 # 02 — Project layout
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 A project is a folder. The user owns everything outside `.spadework/`, and the
 engine owns everything inside it. Users can keep a project under version

@@ -1,6 +1,6 @@
 # 03 — Playbooks
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 A playbook is a reusable research recipe: a list of tasks, the rules for
 writing them, the review rubric, and summary instructions. **Playbooks are

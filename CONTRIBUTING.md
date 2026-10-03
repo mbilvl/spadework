@@ -27,6 +27,9 @@ The test suite runs the whole engine against the fake executor
 ([05 — Executors](docs/spec/05-executors.md#fake-tests-and-demos)) and never
 calls a model.
 
+Fork [mbilvl/spadework](https://github.com/mbilvl/spadework) on GitHub,
+then:
+
 ```bash
 git clone https://github.com/YOUR-USERNAME/spadework.git
 cd spadework

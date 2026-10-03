@@ -1,6 +1,6 @@
 # 05 — Executors
 
-Status: Draft · Target: v0.1
+Status: Implemented (v0.1)
 
 An executor runs one session and reports what happened. The engine never
 talks to a model directly. Keeping this behind an interface from day one is
