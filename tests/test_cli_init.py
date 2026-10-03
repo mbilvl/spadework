@@ -404,3 +404,151 @@ def test_paths_are_absolute_when_run_from_the_file_system_root(
 
     shown = (tmp_path / "demo").resolve().as_posix()
     assert result.stdout.startswith(f"Created a fixture project in {shown}:\n")
+
+
+# --- Links and unreadable files: nothing is followed, nothing half-written -----
+
+
+def test_force_moves_a_dangling_brief_link_aside_without_following_it(
+    cli: Invoke, builtins: Path, workdir: Path, tmp_path: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    outside = tmp_path / "outside" / "stolen.md"
+    outside.parent.mkdir()
+    (root / "brief.md").symlink_to(outside)
+
+    result = cli("init", "demo", "--force", "--playbook", "quickstart")
+
+    assert result.exit_code == 0, result.output
+    assert not outside.exists()
+    assert (root / "brief.md.bak").is_symlink()
+    assert os.readlink(root / "brief.md.bak") == str(outside)
+    assert not (root / "brief.md").is_symlink()
+    assert (root / "brief.md").read_text().startswith("---\n")
+    assert "the old one is kept as brief.md.bak" in result.stderr
+
+
+def test_force_moves_a_linked_config_aside_and_leaves_its_target_alone(
+    cli: Invoke, builtins: Path, workdir: Path, tmp_path: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    outside = tmp_path / "shared.toml"
+    outside.write_text("shared")
+    (root / "spadework.toml").symlink_to(outside)
+
+    result = cli("init", "demo", "--force", "--playbook", "quickstart")
+
+    assert result.exit_code == 0, result.output
+    assert outside.read_text() == "shared"
+    assert (root / "spadework.toml.bak").is_symlink()
+    assert not (root / "spadework.toml").is_symlink()
+
+
+def test_force_refuses_a_linked_gitignore_before_writing(
+    cli: Invoke, builtins: Path, workdir: Path, tmp_path: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    outside = tmp_path / "global-ignore"
+    outside.write_text("node_modules/\n")
+    (root / ".gitignore").symlink_to(outside)
+    (root / "brief.md").write_text("mine")
+
+    result = cli("init", "demo", "--force", "--playbook", "quickstart")
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: demo/.gitignore is a link, and init does not write through links\n"
+        "Replace it with a copy of the file it points to, then run `spadework init` "
+        "again.\n"
+    )
+    assert outside.read_text() == "node_modules/\n"
+    assert sorted(p.name for p in root.iterdir()) == [".gitignore", "brief.md"]
+    assert (root / "brief.md").read_text() == "mine"
+
+
+def test_force_refuses_a_linked_inputs_folder(
+    cli: Invoke, builtins: Path, workdir: Path, tmp_path: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    (root / "inputs").symlink_to(tmp_path / "nowhere")
+
+    result = cli("init", "demo", "--force", "--playbook", "quickstart")
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith("error: demo/inputs is a link\n")
+    assert sorted(p.name for p in root.iterdir()) == ["inputs"]
+
+
+def test_a_dangling_link_as_the_folder_is_refused(
+    cli: Invoke, builtins: Path, workdir: Path, tmp_path: Path
+) -> None:
+    (workdir / "demo").symlink_to(tmp_path / "nowhere")
+
+    result = cli("init", "demo", "--playbook", "quickstart")
+
+    assert result.exit_code == 2
+    assert "is a link to nothing\nChoose a folder for the project.\n" in result.stderr
+    assert not (tmp_path / "nowhere").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
+def test_force_reads_everything_before_it_writes_anything(
+    cli: Invoke, builtins: Path, workdir: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    (root / "spadework.toml").write_text("mine")
+    (root / "brief.md").write_text("secret")
+    (root / "brief.md").chmod(0)
+    try:
+        result = cli("init", "demo", "--force", "--playbook", "quickstart")
+    finally:
+        (root / "brief.md").chmod(0o644)
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: cannot read demo/brief.md: Permission denied\n"
+        "Make it readable, or move it out of the folder, then run `spadework init` "
+        "again.\n"
+    )
+    assert (root / "spadework.toml").read_text() == "mine"
+    assert sorted(p.name for p in root.iterdir()) == ["brief.md", "spadework.toml"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write anything")
+def test_force_refuses_a_gitignore_it_cannot_add_to_before_writing(
+    cli: Invoke, builtins: Path, workdir: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    (root / ".gitignore").write_text("node_modules/\n")
+    (root / ".gitignore").chmod(0o444)
+    try:
+        result = cli("init", "demo", "--force", "--playbook", "quickstart")
+    finally:
+        (root / ".gitignore").chmod(0o644)
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith("error: demo/.gitignore cannot be written to\n")
+    assert sorted(p.name for p in root.iterdir()) == [".gitignore"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write anything")
+def test_a_read_only_gitignore_that_already_ignores_state_is_fine(
+    cli: Invoke, builtins: Path, workdir: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    (root / ".gitignore").write_text(".spadework/\n")
+    (root / ".gitignore").chmod(0o444)
+    try:
+        result = cli("init", "demo", "--force", "--playbook", "quickstart")
+    finally:
+        (root / ".gitignore").chmod(0o644)
+
+    assert result.exit_code == 0, result.output
+    assert (root / ".gitignore").read_text() == ".spadework/\n"

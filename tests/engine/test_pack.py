@@ -356,6 +356,7 @@ def test_pack_json(runner: Runner) -> None:
         "project",
         "generated_at",
         "versions",
+        "summary_pending",
         "documents",
         "decisions",
         "open_questions",
@@ -366,6 +367,7 @@ def test_pack_json(runner: Runner) -> None:
         "sources",
     ]
     assert data["schema_version"] == 1
+    assert data["summary_pending"] is False
     assert data["project"] == "acme-fabrication"
     assert data["generated_at"] == ran.manifest.ended_at or data["generated_at"]
     assert data["versions"] == {

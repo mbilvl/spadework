@@ -1020,7 +1020,8 @@ def clean(
         what: cleaning.What = "all" if everything else "runs" if runs else "cache"
         root = options.root()
         state = root / cleaning.STATE_DIR
-        if not (state.exists() or state.is_symlink()):
+        cleaning.check_state(root, _here(root, cleaning.STATE_DIR))
+        if not state.exists():
             ui.info(
                 f"Nothing to remove: there is no {_here(root, cleaning.STATE_DIR)}/."
             )

@@ -19,6 +19,10 @@ from spadework.executors.base import SessionSpec
 from tests.engine.conftest import Recording, Runner
 
 CODE_ONLY = "The prose summary is written when a run finishes."
+STOPPED = (
+    "> The last run stopped before it finished: this summary covers only the "
+    "documents finished so far. It is written again when a run finishes."
+)
 
 
 def out(runner: Runner, name: str) -> Path:
@@ -146,12 +150,72 @@ def test_a_budget_stop_runs_the_summary_on_its_reserve(runner: Runner) -> None:
     text = out(runner, "00-summary.md").read_text()
     assert "## Executive summary" in text
     assert CODE_ONLY not in text
+    # Written by a run that stopped: it says so, and pack.json too.
+    assert text.startswith(f"# Summary\n\n{STOPPED}\n\nPlaceholder text")
+    assert json.loads(out(runner, "pack.json").read_text())["summary_pending"] is True
     assert "| 03-plan.md: Plan | not produced |" in text
     assert ran.manifest.sessions[-1].kind == "summary"
     # The summary stays owed: the next run that finishes writes it again.
     resumed = runner()
     assert resumed.executor.reviewing()[-1] == "summary"
     assert resumed.code == 0
+    assert STOPPED not in out(runner, "00-summary.md").read_text()
+    assert json.loads(out(runner, "pack.json").read_text())["summary_pending"] is False
+
+
+def test_a_budget_stop_from_real_spend_marks_the_reserve_summary_pending(
+    runner: Runner,
+) -> None:
+    # Every session costs $0.60 of a $2.00 budget: after the overview and
+    # the landscape research, the landscape draft cannot start.
+    ran = runner({"*": {"cost_usd": 0.6}}, budget_usd=2.0)
+
+    assert (ran.code, ran.result.outcome) == (ExitCode.LIMIT, "budget")
+    assert ran.executor.kinds()[-1] == "summary"
+    record = json.loads(
+        (runner.root / ".spadework" / "records" / "summary.json").read_text()
+    )
+    assert record["pending"] is True
+    assert record["result"] is not None  # the prose was written
+    text = out(runner, "00-summary.md").read_text()
+    assert STOPPED in text
+    assert "## Executive summary" in text
+    pack = json.loads(out(runner, "pack.json").read_text())
+    assert pack["summary_pending"] is True
+    assert len(pack["consolidated_questions"]) == 1  # the overview's question
+
+
+def test_a_stop_after_a_redraft_to_the_same_bytes_keeps_the_summary(
+    runner: Runner,
+) -> None:
+    runner()
+    record = runner.root / ".spadework" / "records" / "summary.json"
+    prose = runner.root / ".spadework" / "work" / "00-summary.md"
+    before = (record.read_bytes(), prose.read_bytes())
+
+    # The fake redrafts plan to the same bytes; the critic then stops the run.
+    ran = runner({"critic": {"fail": "rate_limit"}}, force=True, only=["plan"])
+
+    assert (ran.code, ran.result.outcome) == (ExitCode.RATE_LIMITED, "rate_limited")
+    assert ran.executor.kinds() == ["plan:draft", "critic"]
+    assert (record.read_bytes(), prose.read_bytes()) == before
+    text = out(runner, "00-summary.md").read_text()
+    assert "## Executive summary" in text
+    assert CODE_ONLY not in text
+    assert STOPPED not in text
+    assert json.loads(out(runner, "pack.json").read_text())["summary_pending"] is False
+
+
+def test_a_stop_after_a_changed_redraft_owes_a_new_summary(runner: Runner) -> None:
+    runner()
+    task = runner.root / "playbooks" / "valid" / "tasks" / "plan.md"
+    task.write_text(task.read_text() + "Required headings: Phases, Risks\n")
+
+    ran = runner({"critic": {"fail": "rate_limit"}})
+
+    assert ran.result.outcome == "rate_limited"
+    assert CODE_ONLY in out(runner, "00-summary.md").read_text()
+    assert json.loads(out(runner, "pack.json").read_text())["summary_pending"] is True
 
 
 def test_a_budget_stop_without_time_for_the_summary_writes_it_by_code(
@@ -186,10 +250,14 @@ def test_a_stop_keeps_a_persons_edits(runner: Runner) -> None:
     ran = runner(executor=stop_at_plan(runner, KeyboardInterrupt()))
 
     assert ran.code == ExitCode.INTERRUPTED
+    assert ran.executor.kinds() == ["landscape:draft", "plan:draft"]
     assert out(runner, "01-overview.md").read_text() == edited
     assert "out/01-overview.md" not in ran.finished.rendered
+    # landscape was redrafted to the same bytes, so the prose summary stays;
+    # its table, written by code, shows the person's edits.
     summary = out(runner, "00-summary.md").read_text()
-    assert CODE_ONLY in summary
+    assert CODE_ONLY not in summary
+    assert "## Executive summary" in summary
     assert "edited by a person" in summary
 
 

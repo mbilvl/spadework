@@ -155,7 +155,8 @@ is `{id, task, url, status, detail, checked_at, final_url}`.
 the research records (`.spadework/records/*.research.json`), so the next
 run researches those tasks again, and `--all` the whole of `.spadework/`.
 Give exactly one. It never touches `spadework.toml`, `brief.md`, `inputs/`
-or `out/`. It says what it will remove and its size, holds the project lock
+or `out/`, and it refuses (exit `3`) when `.spadework` is a symbolic link or
+resolves outside the project. It says what it will remove and its size, holds the project lock
 while removing (exit `7` if a run holds it), asks on a TTY, and needs `--yes`
 otherwise (exit `2`). After `--all`, the next run has no record of the files
 in `out/` and leaves them alone, so `clean` warns and suggests deleting

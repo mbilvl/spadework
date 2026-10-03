@@ -589,7 +589,11 @@ class Review:
         progress = self._progress()
         self._set(
             progress.model_copy(
-                update={"writing": None, "changed": progress.changed or changed}
+                update={
+                    "writing": None,
+                    "changed": progress.changed or changed,
+                    "outputs_changed": progress.outputs_changed or changed,
+                }
             )
         )
         reason = failure_summary(pending.validators)

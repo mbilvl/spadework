@@ -386,6 +386,7 @@ def pack_document(
         "project": project,
         "generated_at": generated_at,
         "versions": dict(versions),
+        "summary_pending": summary is not None and summary.pending,
         "documents": listed["documents"],
         "decisions": listed["decisions"],
         "open_questions": listed["open_questions"],
@@ -410,6 +411,8 @@ def summary_markdown(
     """``out/00-summary.md``: the session's prose, then what code writes."""
     if record is not None and record.result is not None and prose is not None:
         head = prose.rstrip("\n")
+        if record.pending:
+            head = _with_note(head, STOPPED_NOTE)
     elif record is not None and record.pending:
         head = (
             f"# {md(title)}\n\nThe summary of this research pack.\n\n"
@@ -432,6 +435,21 @@ def summary_markdown(
         produced_section(None if record is None else record.produced),
     ]
     return "\n\n".join(part for part in parts if part) + "\n"
+
+
+STOPPED_NOTE = (
+    "> The last run stopped before it finished: this summary covers only the "
+    "documents finished so far. It is written again when a run finishes."
+)
+
+
+def _with_note(prose: str, note: str) -> str:
+    """``note`` as a paragraph after the prose's level-1 heading, or first."""
+    first, _, rest = prose.partition("\n")
+    if not first.startswith("# "):
+        return f"{note}\n\n{prose}"
+    rest = rest.lstrip("\n")
+    return f"{first}\n\n{note}" + (f"\n\n{rest}" if rest else "")
 
 
 def documents_section(documents: Sequence[Document]) -> str:

@@ -10,6 +10,11 @@ See docs/spec/01-cli.md. Only ``.spadework/`` is touched: never
 
 The project lock is held while files are removed, so a run cannot start
 half-way through, and a run that holds it stops ``clean`` (exit code 7).
+
+Nothing outside the project is ever removed. A ``.spadework`` that is a link,
+or that resolves outside the project, is refused before the lock is taken
+(``check_state``), and no link inside it is followed: a link is removed as
+a link.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from spadework.errors import InvalidError
 from spadework.lock import LOCK_FILE, ProjectLock
 
 STATE_DIR = ".spadework"
@@ -61,23 +67,50 @@ class CleanPlan:
         return not self.targets
 
 
+def check_state(root: Path, shown: str = STATE_DIR) -> None:
+    """Refuse a ``.spadework`` that ``clean`` cannot remove from safely.
+
+    ``shown`` names it in messages. Raises InvalidError (exit code 3) when it
+    is a link, resolves outside the project, or is not a folder. Called
+    before the project lock is taken, since the lock is a file in it.
+    """
+    state = root / STATE_DIR
+    mode = _mode(state)
+    if mode is None:
+        return
+    hint = (
+        f"spadework keeps its state in a {STATE_DIR} folder inside the project, "
+        "and clean removes nothing outside it. Remove or move it yourself."
+    )
+    if stat.S_ISLNK(mode):
+        raise InvalidError(f"{shown} is a link, so clean leaves it alone", hint)
+    if not stat.S_ISDIR(mode):
+        raise InvalidError(f"{shown} is not a folder, so clean leaves it alone", hint)
+    real_root = Path(os.path.realpath(root))
+    if not Path(os.path.realpath(state)).is_relative_to(real_root):
+        raise InvalidError(
+            f"{shown} resolves outside the project, so clean leaves it alone", hint
+        )
+
+
 def plan_clean(root: Path, what: What) -> CleanPlan:
-    """What ``clean`` would remove from the project at ``root``."""
+    """What ``clean`` would remove from the project at ``root``, which
+    ``check_state`` has passed."""
     state = root / STATE_DIR
     targets: list[Target] = []
     detail = ""
     if what == "all":
-        if state.exists() or state.is_symlink():
+        if _mode(state) is not None:
             targets.append(_target(state, f"{STATE_DIR}/"))
             detail = _count(_runs(state), "run")
     elif what == "runs":
         runs = state / RUNS_DIR
-        if runs.exists() or runs.is_symlink():
+        if _mode(runs) is not None:
             targets.append(_target(runs, f"{STATE_DIR}/{RUNS_DIR}/"))
             detail = _count(_runs(state), "run")
     else:
         records = state / RECORDS_DIR
-        if records.is_dir() and not records.is_symlink():
+        if _is_folder(records):
             for name in sorted(os.listdir(records)):
                 if name.endswith(RESEARCH_SUFFIX):
                     path = records / name
@@ -92,9 +125,10 @@ def clean(plan: CleanPlan, lock: ProjectLock) -> None:
     With ``all``, everything in ``.spadework/`` but the lock goes first; the
     lock is released, then the folder is removed if nothing new is in it.
     """
+    check_state(plan.root)  # again: it may have changed since the plan
     state = plan.root / STATE_DIR
     for target in plan.targets:
-        if target.path == state and not state.is_symlink():
+        if target.path == state:
             for entry in sorted(os.listdir(state)):
                 if entry != LOCK_FILE:
                     _remove(state / entry)
@@ -128,23 +162,39 @@ def _target(path: Path, relative: str) -> Target:
 
 def _files(path: Path) -> Iterator[Path]:
     """Every file under ``path``, links included but not followed."""
-    try:
-        mode = path.lstat().st_mode
-    except OSError:
+    mode = _mode(path)
+    if mode is None:
         return
     if not stat.S_ISDIR(mode):
         yield path
         return
-    for current, _, names in os.walk(path):
-        for name in names:
+    # os.walk does not follow links to folders: they are listed as files.
+    for current, folders, names in os.walk(path):
+        for name in [*names, *(f for f in folders if Path(current, f).is_symlink())]:
             yield Path(current, name)
+
+
+def _mode(path: Path) -> int | None:
+    """The mode of ``path`` itself, not of what a link points to; None if
+    there is nothing there."""
+    try:
+        return path.lstat().st_mode
+    except FileNotFoundError:
+        return None
+
+
+def _is_folder(path: Path) -> bool:
+    """Whether ``path`` is a folder, and not a link to one."""
+    mode = _mode(path)
+    return mode is not None and stat.S_ISDIR(mode)
 
 
 def _runs(state: Path) -> int:
     runs = state / RUNS_DIR
-    if not runs.is_dir() or runs.is_symlink():
+    if not _is_folder(runs):
         return 0
-    return sum(1 for entry in runs.iterdir() if entry.is_dir())
+    with os.scandir(runs) as entries:
+        return sum(1 for entry in entries if entry.is_dir(follow_symlinks=False))
 
 
 def _count(number: int, noun: str) -> str:
@@ -152,8 +202,10 @@ def _count(number: int, noun: str) -> str:
 
 
 def _remove(path: Path) -> None:
-    if path.is_symlink() or not path.is_dir():
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
+    """Remove ``path``. A link is removed, never what it points to; rmtree
+    does not follow the links inside a folder either."""
+    if _is_folder(path):
+        shutil.rmtree(path)
         return
-    shutil.rmtree(path)
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()

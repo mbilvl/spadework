@@ -140,6 +140,10 @@ class ReviewProgress(StrictModel):
     """Fixed tasks whose validators failed, and whose repair is still owed."""
     changed: bool = False
     """A fix or repair changed a document in this round."""
+    outputs_changed: bool = False
+    """A draft, repair or fix changed an output's bytes since the last
+    summary. Only then does a run that stops owe a new summary: an output
+    redrafted to the same bytes leaves the summary as it is."""
     writing: PendingWrite | None = None
     """A fixed document being written, until it is recorded."""
     reviewed: bool = False

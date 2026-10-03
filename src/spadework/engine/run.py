@@ -786,6 +786,12 @@ class _Run:
         result = outcome.record
         assert isinstance(result, DraftResult)
         assert outcome.content is not None
+        previous = self.state.tasks.get(task.id)
+        before = (
+            None
+            if previous is None or previous.output is None
+            else (previous.output.hash)
+        )
         digest = write_work(self.root, task.output, outcome.content)
         write_record(
             self.root,
@@ -806,10 +812,14 @@ class _Run:
             run_id=self.run_id,
         )
         review = self.state.review
+        carried = review is not None and review.outputs_changed
         if review is None or review.run_id != self.run_id or review.reviewed:
-            # This run changed an output: its review, summary and render are
+            # This run drafted an output: its review, summary and render are
             # owed from now on, even if it is interrupted.
-            self.state.review = ReviewProgress(run_id=self.run_id)
+            review = ReviewProgress(run_id=self.run_id, outputs_changed=carried)
+        if digest != before and not review.outputs_changed:
+            review = review.model_copy(update={"outputs_changed": True})
+        self.state.review = review
         self.save_state()
         reason = failure_summary(outcome.validators)
         self._finish_task(task.id, entry.status, reason, outcome.validators)
@@ -892,14 +902,15 @@ class _Run:
         """Render what a run that stopped had finished, and a summary of it.
 
         The documents finished so far, ``sources.md`` and ``pack.json`` go
-        into ``out/``, as at the end of any run, and person's edits stay. If
-        this run (or an unfinished one) changed an output, the summary is
-        still owed: on a budget stop with time left, the summary session runs
-        on its reserve; otherwise ``00-summary.md`` has only what code writes.
-        Either way the next run that finishes writes the summary again.
+        into ``out/``, as at the end of any run, and a person's edits stay.
+        If this run (or an unfinished one) changed an output's bytes, the
+        summary is owed: on a budget stop with time left, the summary session
+        runs on its reserve; otherwise ``00-summary.md`` has only what code
+        writes. Either way it is marked pending, and the next run that
+        finishes writes it again. Otherwise the summary is left as it is.
         """
         try:
-            if self.state.review is not None:
+            if self._summary_owed_on_stop():
                 ran = any(s.kind == "summary" for s in self.manifest.sessions)
                 session = (
                     outcome == "budget"
@@ -917,6 +928,15 @@ class _Run:
                     "`spadework run` renders it when it next finishes.",
                 )
             )
+
+    def _summary_owed_on_stop(self) -> bool:
+        """Whether a stopped run must replace the summary: an output's bytes
+        changed since it was written, or there is none. A redraft to the same
+        bytes leaves the prose summary and its record as they are."""
+        progress = self.state.review
+        if progress is None:
+            return False
+        return progress.outputs_changed or read_summary(self.root) is None
 
     def _render(self, *, final: bool = True) -> None:
         """Render the pack into ``out/``. ``final`` ends the review: a run

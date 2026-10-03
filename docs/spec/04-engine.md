@@ -221,7 +221,8 @@ skipped in this run, even when a person's edits stand in for it.
 
 A run that stops for any reason (budget, time, rate limit, interrupt, error)
 still renders what it finished into `out/`, keeping a person's edits, unless
-rendering itself failed. If outputs changed, the summary is owed: on a budget
+rendering itself failed. If the content of any output changed, the summary
+is owed: on a budget
 stop with time left, the summary session runs on its reserve; otherwise
 `00-summary.md` has only the code-written parts and a note, and the next run
 that finishes writes the summary. A run stopped by `max_time` before a

@@ -216,4 +216,6 @@ The whole pack as data, for scripts and for later phases:
 | `sources` | `{id, task, url, title, publisher, accessed, quote, claim, cited, verification, verification_detail, checked_at, final_url}` |
 
 `versions` come from the run that wrote the summary, and `generated_at`
-changes only when the rest of the file does.
+changes only when the rest of the file does. `summary_pending` is true when
+the summary was written by a run that stopped early, and the next run that
+finishes will write it again.

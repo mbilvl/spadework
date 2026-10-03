@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from spadework.clean import human_size, plan_clean
+from spadework.clean import check_state, human_size, plan_clean
 from spadework.cli import app
+from spadework.errors import InvalidError
 from spadework.lock import LockOwner
 from tests.conftest import Invoke
 
@@ -302,3 +303,154 @@ def test_help_names_every_option(cli: Invoke) -> None:
 
     for option in ("--runs", "--cache", "--all", "--yes"):
         assert option in text
+
+
+# --- Nothing outside the project is removed -------------------------------------
+
+
+@pytest.fixture
+def linked_state(tmp_path: Path) -> tuple[Path, Path]:
+    """A project whose .spadework is a link to a folder elsewhere."""
+    root = tmp_path / "acme-fabrication"
+    root.mkdir()
+    (root / "spadework.toml").write_text("schema_version = 1\n")
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "runs" / RUN_1).mkdir(parents=True)
+    (elsewhere / "records").mkdir()
+    (elsewhere / "records" / "x.research.json").write_text("{}")
+    (elsewhere / "other.txt").write_text("keep")
+    (root / ".spadework").symlink_to(elsewhere)
+    return root, elsewhere
+
+
+def everything(folder: Path) -> list[str]:
+    return sorted(path.relative_to(folder).as_posix() for path in folder.rglob("*"))
+
+
+@pytest.mark.parametrize("flag", ["--runs", "--cache", "--all"])
+def test_a_linked_state_folder_is_refused(
+    cli: Invoke, linked_state: tuple[Path, Path], flag: str
+) -> None:
+    root, elsewhere = linked_state
+    before = everything(elsewhere)
+
+    result = cli("clean", flag, "--yes", "-C", root)
+
+    assert result.exit_code == 3
+    assert result.stderr == (
+        "error: acme-fabrication/.spadework is a link, so clean leaves it alone\n"
+        "spadework keeps its state in a .spadework folder inside the project, and "
+        "clean removes nothing outside it. Remove or move it yourself.\n"
+    )
+    assert everything(elsewhere) == before  # no lock left there either
+    assert (root / ".spadework").is_symlink()
+
+
+def test_a_dangling_state_link_is_refused(cli: Invoke, tmp_path: Path) -> None:
+    root = tmp_path / "acme-fabrication"
+    root.mkdir()
+    (root / "spadework.toml").write_text("schema_version = 1\n")
+    (root / ".spadework").symlink_to(tmp_path / "nowhere")
+
+    result = cli("clean", "--all", "--yes", "-C", root)
+
+    assert result.exit_code == 3
+    assert not (tmp_path / "nowhere").exists()
+
+
+def test_a_state_file_is_refused(cli: Invoke, tmp_path: Path) -> None:
+    root = tmp_path / "acme-fabrication"
+    root.mkdir()
+    (root / "spadework.toml").write_text("schema_version = 1\n")
+    (root / ".spadework").write_text("not a folder")
+
+    result = cli("clean", "--all", "--yes", "-C", root)
+
+    assert result.exit_code == 3
+    assert result.stderr.startswith(
+        "error: acme-fabrication/.spadework is not a folder, so clean leaves it alone\n"
+    )
+    assert (root / ".spadework").read_text() == "not a folder"
+
+
+def test_a_state_folder_that_resolves_outside_is_refused(
+    project: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = os.path.realpath
+
+    def resolve(path: str | os.PathLike[str]) -> str:
+        if Path(path).name == ".spadework":
+            return str(tmp_path / "elsewhere")
+        return real(path)
+
+    monkeypatch.setattr("spadework.clean.os.path.realpath", resolve)
+
+    with pytest.raises(InvalidError) as caught:
+        check_state(project)
+
+    assert caught.value.message == (
+        ".spadework resolves outside the project, so clean leaves it alone"
+    )
+
+
+@pytest.mark.parametrize("flag", ["--runs", "--all"])
+def test_links_inside_the_state_folder_are_removed_not_followed(
+    cli: Invoke, project: Path, tmp_path: Path, flag: str
+) -> None:
+    outside = tmp_path / "outside"
+    (outside / "keep").mkdir(parents=True)
+    (outside / "keep" / "file.txt").write_text("keep")
+    state = project / ".spadework"
+    (state / "runs" / RUN_1 / "linked").symlink_to(outside / "keep")
+    (state / "work" / "linked").symlink_to(outside / "keep")
+
+    result = cli("clean", flag, "--yes", "-C", project)
+
+    assert result.exit_code == 0, result.output
+    assert (outside / "keep" / "file.txt").read_text() == "keep"
+    assert not (state / "runs").exists()
+
+
+def test_a_linked_runs_folder_is_removed_as_a_link(
+    cli: Invoke, project: Path, tmp_path: Path
+) -> None:
+    state = project / ".spadework"
+    outside = tmp_path / "outside-runs"
+    (state / "runs").rename(outside)
+    (state / "runs").symlink_to(outside)
+
+    result = cli("clean", "--runs", "--yes", "-C", project)
+
+    assert result.exit_code == 0, result.output
+    assert not (state / "runs").is_symlink()
+    assert (outside / RUN_1 / "manifest.json").exists()
+
+
+def test_linked_research_records_are_removed_as_links(
+    cli: Invoke, project: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.research.json"
+    outside.write_text("keep")
+    records = project / ".spadework" / "records"
+    (records / "seo.research.json").symlink_to(outside)
+
+    result = cli("clean", "--cache", "--yes", "-C", project)
+
+    assert result.exit_code == 0, result.output
+    assert outside.read_text() == "keep"
+    assert sorted(path.name for path in records.iterdir()) == ["landscape.draft.json"]
+
+
+def test_a_linked_records_folder_holds_no_records(
+    cli: Invoke, project: Path, tmp_path: Path
+) -> None:
+    records = project / ".spadework" / "records"
+    outside = tmp_path / "outside-records"
+    records.rename(outside)
+    records.symlink_to(outside)
+
+    result = cli("clean", "--cache", "--yes", "-C", project)
+
+    assert result.exit_code == 0
+    assert result.stderr == "Nothing to remove: there are no research records.\n"
+    assert (outside / "landscape.research.json").exists()
