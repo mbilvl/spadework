@@ -5,9 +5,10 @@ docs/spec/07-security.md. For each attempt, ``SessionRunner.run``:
 
 1. waits for a rate limit to reset, or stops the run (``--wait-on-rate-limit``)
 2. checks the run's time and budget, and works out the session's timeout and
-   cap: ``min(session_timeout, time left - 30 s)`` and
+   cap: ``min(session_timeout, time left - 30 s - kept)`` and
    ``min(1.5 * estimate, budget left)``, where the budget left keeps the
-   summary's reserve back
+   summary's reserve back, and the review's sessions keep a slot of time for
+   the summary
 3. stages a fresh directory with read-only copies of the session's files,
    and writes its guard policy into ``.spadework/control/``
 4. runs the session through the executor, and collects its one output
@@ -148,6 +149,10 @@ class RunLimits:
     def time_left(self, now: float) -> float:
         return self.deadline - now
 
+    def session_fits(self, now: float) -> bool:
+        """Whether one more session could still start now."""
+        return self.time_left(now) - TIME_MARGIN_S >= MIN_SESSION_S
+
     def room(self, estimate_usd: float, sessions: int, now: float) -> str | None:
         """Why ``sessions`` more sessions costing ``estimate_usd`` in all
         cannot start now, or None when they can. Neither the summary's
@@ -208,6 +213,9 @@ class SessionRequest:
     record of the findings the fixer rejected."""
     use_reserve: bool = False
     """For the summary: it may spend the reserve kept back for it."""
+    keep_s: float = 0.0
+    """Seconds of the run's time to keep for later, such as the summary's
+    slot: the session's timeout leaves them free."""
 
     @property
     def what(self) -> str:
@@ -319,7 +327,7 @@ class SessionRunner:
         self, request: SessionRequest, attempt: int, retries: _Retries
     ) -> _Ran:
         self._wait_for_rate_limit()
-        timeout, time_limited = self._timeout()
+        timeout, time_limited = self._timeout(request)
         cap, cap_limited = self._cap(request)
         n = self.manifest.next_session()
         kind = request.kind
@@ -593,6 +601,12 @@ class SessionRunner:
                 return _Verdict(stop=RunStopped("error", f"{what}: {error}", hint))
             case "timeout":
                 if time_limited:
+                    if request.keep_s:
+                        return _Verdict(
+                            stop=self._out_of_time(
+                                f"{what} used the time left before the summary"
+                            )
+                        )
                     return _Verdict(stop=self._out_of_time())
                 limit = format_duration(self.limits.session_timeout_s)
                 return _Verdict(
@@ -623,20 +637,25 @@ class SessionRunner:
 
     # Limits.
 
-    def _timeout(self) -> tuple[int, bool]:
-        """The next session's timeout, and whether the run's time limited it."""
+    def _timeout(self, request: SessionRequest) -> tuple[int, bool]:
+        """The next session's timeout, and whether the run's time limited it.
+
+        The request's ``keep_s`` is left free for what comes after it.
+        """
         left = self.limits.deadline - self.clock.monotonic()
-        room = int(left - TIME_MARGIN_S)
+        room = int(left - TIME_MARGIN_S - request.keep_s)
         if room < MIN_SESSION_S:
+            if request.keep_s and left - TIME_MARGIN_S >= MIN_SESSION_S:
+                raise self._out_of_time("the time left is kept for the summary")
             raise self._out_of_time()
         timeout = min(self.limits.session_timeout_s, room)
         return timeout, timeout < self.limits.session_timeout_s
 
-    def _out_of_time(self) -> RunStopped:
+    def _out_of_time(self, message: str | None = None) -> RunStopped:
         limit = format_duration(self.limits.max_time_s)
         return RunStopped(
             "time",
-            f"the run reached its time limit ({limit})",
+            message or f"the run reached its time limit ({limit})",
             f"{RESUME} Pass a longer --max-time if needed.",
         )
 

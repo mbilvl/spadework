@@ -24,18 +24,20 @@ engine's own, never mistaken for a person's edit.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import secrets
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from spadework.engine.documents import (
     PACK_FILE,
     SOURCES_FILE,
     Document,
     load_documents,
-    pack_json,
+    pack_document,
     render_document,
     sources_markdown,
     summary_markdown,
@@ -119,7 +121,7 @@ def render_pack(
             _File(document.output, render_document(document, content), task_id)
         )
     if files or state.files:
-        files += _pack_files(project, documents, versions, generated_at)
+        files += _pack_files(project, state, documents, versions, generated_at)
 
     to_write: list[_File] = []
     to_record: list[_File] = []
@@ -163,6 +165,7 @@ def render_pack(
 
 def _pack_files(
     project: Project,
+    state: State,
     documents: list[Document],
     versions: Mapping[str, str],
     generated_at: str,
@@ -177,19 +180,23 @@ def _pack_files(
             "playbook": produced.playbook,
             "executor": produced.executor,
         }
+    data = pack_document(
+        project=project.config.project.name,
+        documents=documents,
+        summary=summary,
+        versions=versions,
+        generated_at=generated_at,
+    )
+    previous = _rendered_pack(root, state)
+    if previous is not None and {**previous, "generated_at": None} == {
+        **data,
+        "generated_at": None,
+    }:
+        # Nothing in it changed: it keeps its time, and is not written again.
+        data["generated_at"] = previous["generated_at"]
     files = [
         _File(SOURCES_FILE, sources_markdown(title, documents).encode(), None),
-        _File(
-            PACK_FILE,
-            pack_json(
-                project=project.config.project.name,
-                documents=documents,
-                summary=summary,
-                versions=versions,
-                generated_at=generated_at,
-            ).encode(),
-            None,
-        ),
+        _File(PACK_FILE, _json(data).encode(), None),
     ]
     if summary is not None:
         text = summary_markdown(
@@ -200,6 +207,23 @@ def _pack_files(
         )
         files.insert(0, _File(SUMMARY_FILE, text.encode(), None))
     return files
+
+
+def _rendered_pack(root: Path, state: State) -> dict[str, Any] | None:
+    """``out/pack.json`` as the engine last rendered it, if it still is."""
+    path = root / OUT_DIR / PACK_FILE
+    recorded = state.files.get(PACK_FILE)
+    if recorded is None or file_hash(path) != recorded:
+        return None
+    try:
+        data = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _json(data: Mapping[str, Any]) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
 def _verdict(root: Path, state: State, item: _File, replace: Collection[str]) -> str:

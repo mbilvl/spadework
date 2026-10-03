@@ -96,6 +96,8 @@ class CriticRecord(StrictModel):
 
     schema_version: SchemaVersion = SCHEMA_VERSION
     run_id: str
+    review: str | None = None
+    """The run that started the review: a resumed review is told by it."""
     round: int = Field(ge=1)
     result: CriticResult
     findings: list[ReviewFinding]
@@ -134,6 +136,8 @@ class SummaryRecord(StrictModel):
 
     schema_version: SchemaVersion = SCHEMA_VERSION
     run_id: str
+    review: str | None = None
+    """The run that started the review this summary ends."""
     result: SummaryResult | None
     """None when the summary session failed: ``error`` says why."""
     error: str | None = None

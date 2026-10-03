@@ -12,6 +12,7 @@ from spadework.engine import events as ev
 from spadework.errors import ExitCode
 from spadework.executors.base import SessionSpec
 from spadework.executors.fake import draft_result
+from spadework.keys import hash_bytes
 from tests.conftest import MakeProject
 from tests.engine.conftest import (
     Recording,
@@ -305,7 +306,12 @@ def test_a_failed_fix_keeps_the_document(runner: Runner) -> None:
     assert any(
         n.message.startswith("overview: the fix failed (") for n in ran.of(ev.Notice)
     )
-    assert ran.executor.reviewing() == ["critic", "overview:fix", "critic", "summary"]
+    # Nothing changed, so another critic would see the same pack.
+    assert ran.executor.reviewing() == ["critic", "overview:fix", "summary"]
+    assert any(
+        n.message == "review round 1 changed no document, so the review stopped"
+        for n in ran.of(ev.Notice)
+    )
     assert ran.code == 0
 
 
@@ -430,7 +436,8 @@ def test_findings_on_an_edited_document_are_kept_for_the_summary(
     ran = runner({"critic": {"structured": findings, "times": 1}})
 
     assert ran.executor.drafting() == ["landscape:draft", "plan:draft"]
-    assert ran.executor.reviewing() == ["critic", "critic", "summary"]
+    # Every finding was on the edited document: no second critic.
+    assert ran.executor.reviewing() == ["critic", "summary"]
     assert out.read_text() == "# Overview\n\nThe person's version.\n"
     critic_session = ran.executor.of(None, "critic")[0]
     assert critic_session.files["01-overview.md"] == out.read_text()
@@ -689,8 +696,8 @@ def test_a_finding_on_a_task_with_no_document_is_dropped(runner: Runner) -> None
         }
     )
 
-    # Nothing left to fix in round 1; the fake critic ships in round 2.
-    assert ran.executor.reviewing() == ["critic", "critic", "summary"]
+    # Nothing left to fix in round 1, so no second critic.
+    assert ran.executor.reviewing() == ["critic", "summary"]
     assert any(
         n.message == "review round 1: dropped finding F1: 02-landscape.md has no "
         "document to fix"
@@ -716,3 +723,308 @@ def test_a_failed_repair_after_a_fix_keeps_the_fix(runner: Runner) -> None:
     assert work.read_text().endswith("Revised after review (F1).\n")
     assert ran.state.tasks["overview"].status == "invalid"
     assert ran.code == ExitCode.PARTIAL
+
+
+def test_findings_for_a_person_survive_a_summary_retried_later(
+    runner: Runner,
+) -> None:
+    runner()
+    (runner.root / "out" / "03-plan.md").write_text("# Plan\n\nMine.\n")
+    (runner.root / "inputs" / "calls").mkdir()
+    (runner.root / "inputs" / "calls" / "new.md").write_text("# New\n")
+    findings = critic(finding("F1", "03-plan.md", "Date each phase."))
+    failed = runner(
+        {
+            "critic": {"structured": findings, "times": 1},
+            "summary": {"fail": "invalid_schema"},
+        }
+    )
+    assert failed.code == ExitCode.PARTIAL
+    row = "| 03-plan.md | specificity | medium | Date each phase. |"
+    assert row in (runner.root / "out" / "00-summary.md").read_text()
+
+    retried = runner()
+
+    assert retried.executor.kinds() == ["summary"]
+    assert retried.code == 0
+    text = (runner.root / "out" / "00-summary.md").read_text()
+    assert "## Executive summary" in text
+    assert row in text
+
+
+def test_findings_for_a_document_no_longer_edited_are_not_carried_over(
+    runner: Runner,
+) -> None:
+    runner()
+    plan = runner.root / "out" / "03-plan.md"
+    original = plan.read_text()
+    plan.write_text("# Plan\n\nMine.\n")
+    (runner.root / "inputs" / "calls").mkdir()
+    (runner.root / "inputs" / "calls" / "new.md").write_text("# New\n")
+    findings = critic(finding("F1", "03-plan.md", "Date each phase."))
+    runner(
+        {
+            "critic": {"structured": findings, "times": 1},
+            "summary": {"fail": "invalid_schema"},
+        }
+    )
+    plan.write_text(original)  # the person's edits are undone
+
+    runner()
+
+    assert "Date each phase." not in (runner.root / "out" / "00-summary.md").read_text()
+
+
+# The summary's slot of time.
+
+
+def spend_until(runner: Runner, left: float) -> Recording:
+    """An executor whose last draft leaves ``left`` seconds of a 1h run."""
+
+    def before(spec: SessionSpec) -> None:
+        if spec.task == "plan" and spec.kind.value == "draft":
+            runner.clock.advance(3600 - left)
+
+    return Recording(before=before)
+
+
+def test_a_review_session_cannot_use_the_summarys_time(runner: Runner) -> None:
+    executor = spend_until(runner, 400)
+
+    def full_timeout(spec: SessionSpec) -> None:
+        if spec.kind.value == "critic":
+            runner.clock.advance(spec.timeout_s)
+
+    plan_hook = executor.before
+    assert plan_hook is not None
+    executor.before = lambda spec: (plan_hook(spec), full_timeout(spec))[0]
+
+    ran = runner(executor=executor, max_time="1h")
+
+    # 400 s left: the critic gets 400 - 30 - 60, and 90 s are left after it.
+    [critic] = ran.executor.of(None, "critic")
+    assert critic.spec.timeout_s == 310
+    assert ran.executor.reviewing() == ["critic", "summary"]
+    assert ran.code == 0
+    assert (runner.root / "out" / "00-summary.md").is_file()
+
+
+def test_a_review_session_stopped_by_the_time_still_leaves_the_summary(
+    runner: Runner,
+) -> None:
+    executor = spend_until(runner, 400)
+    executor.inner.script.update(
+        Recording({"critic": {"fail": "timeout"}}).inner.script
+    )
+    plan_hook = executor.before
+    assert plan_hook is not None
+
+    def hooks(spec: SessionSpec) -> None:
+        plan_hook(spec)
+        if spec.kind.value == "critic":
+            runner.clock.advance(spec.timeout_s)
+
+    executor.before = hooks
+
+    ran = runner(executor=executor, max_time="1h")
+
+    assert ran.executor.reviewing() == ["critic", "summary"]
+    assert any(
+        n.message == "the review stopped: critic used the time left before the summary"
+        for n in ran.of(ev.Notice)
+    )
+    assert ran.code == 0
+    assert ran.result.outcome == "complete"
+
+
+def test_a_repair_with_no_time_left_is_skipped_not_the_run(runner: Runner) -> None:
+    forbid_the_fakes_revision(runner)
+    executor = spend_until(runner, 600)
+    plan_hook = executor.before
+    assert plan_hook is not None
+
+    def hooks(spec: SessionSpec) -> None:
+        plan_hook(spec)
+        if spec.kind.value == "fix":
+            runner.clock.advance(spec.timeout_s)
+
+    executor.before = hooks
+
+    ran = runner(executor=executor, max_time="1h")
+
+    assert ran.executor.reviewing() == ["critic", "overview:fix", "summary"]
+    assert any(
+        n.message.startswith(
+            "overview: the repair after the fix was skipped: the time left"
+        )
+        for n in ran.of(ev.Notice)
+    )
+    assert ran.state.tasks["overview"].status == "invalid"
+    assert ran.code == ExitCode.PARTIAL
+    assert (runner.root / "out" / "00-summary.md").is_file()
+
+
+def test_without_time_for_the_summary_the_run_stops_and_resumes(
+    runner: Runner,
+) -> None:
+    executor = spend_until(runner, 60)
+
+    ran = runner(executor=executor, max_time="1h")
+
+    assert ran.code == ExitCode.LIMIT
+    assert ran.result.outcome == "time"
+    assert ran.executor.reviewing() == []
+    resumed = runner()
+    assert resumed.executor.kinds() == ["summary"]
+    assert resumed.code == 0
+
+
+# A run that stops between a session's work and its record.
+
+
+def test_a_fix_written_but_not_recorded_is_never_done_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from spadework.engine import review
+
+    write = review.write_work
+
+    def write_then_crash(root: Path, output: str, data: bytes) -> str:
+        write(root, output, data)
+        raise Crash
+
+    monkeypatch.setattr(review, "write_work", write_then_crash)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    state = json.loads((runner.root / ".spadework" / "state.json").read_text())
+    assert state["review"]["fixed"] == ["overview"]
+    assert state["review"]["writing"]["task"] == "overview"
+
+    ran = runner(rounds=1)
+
+    # Round 1's fix is recorded, not redone, and it counts as a change.
+    assert ran.executor.kinds() == ["summary"]
+    work = runner.root / ".spadework" / "work" / "01-overview.md"
+    assert work.read_text().count("Revised after review") == 1
+    entry = ran.state.tasks["overview"]
+    assert entry.output is not None
+    assert entry.output.hash == hash_bytes(work.read_bytes())
+    assert ran.state.review is None
+    record = json.loads(
+        (runner.root / ".spadework" / "records" / "overview.draft.json").read_text()
+    )
+    assert record["kind"] == "fix"
+    assert [e.task for e in ran.of(ev.TaskFinished)] == ["overview"]
+    assert (
+        "Revised after review (F1)."
+        in (runner.root / "out" / "01-overview.md").read_text()
+    )
+
+
+def test_a_fix_stopped_before_it_was_written_is_not_done_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from spadework.engine import review
+
+    def crash(root: Path, output: str, data: bytes) -> str:
+        raise Crash
+
+    monkeypatch.setattr(review, "write_work", crash)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    ran = runner()
+
+    assert ran.executor.kinds() == ["summary"]
+    assert any(
+        n.message == "overview: the last run stopped before it saved the fix, so "
+        "the document stays as it was"
+        for n in ran.of(ev.Notice)
+    )
+    work = runner.root / ".spadework" / "work" / "01-overview.md"
+    assert "Revised after review" not in work.read_text()
+    assert ran.code == 0
+
+
+def crash_writing(monkeypatch: pytest.MonkeyPatch, name: str, *, after: bool) -> None:
+    """Stop the run as a record called ``name`` is saved, before or after."""
+    from spadework.engine import review
+
+    write = review.write_record
+
+    def write_record(root: Path, record_name: str, record: Any) -> str:
+        if record_name == name and not after:
+            raise Crash
+        written = write(root, record_name, record)
+        if record_name == name:
+            raise Crash
+        return written
+
+    monkeypatch.setattr(review, "write_record", write_record)
+
+
+def test_a_critic_whose_record_was_not_saved_runs_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crash_writing(monkeypatch, "records/review.round-1.json", after=False)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    ran = runner()
+
+    assert ran.executor.kinds() == ["critic", "overview:fix", "critic", "summary"]
+    assert ran.code == 0
+
+
+def test_a_critic_whose_record_was_saved_is_not_run_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crash_writing(monkeypatch, "records/review.round-1.json", after=True)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    ran = runner()
+
+    # Round 1 uses the saved findings; the fake critic of round 2 asks again.
+    assert ran.executor.kinds() == ["overview:fix", "critic", "overview:fix", "summary"]
+    assert [s.round for s in ran.manifest.sessions] == [1, 2, 2, 0]
+
+
+def test_a_summary_whose_record_was_not_saved_runs_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crash_writing(monkeypatch, "records/summary.json", after=False)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    ran = runner()
+
+    assert ran.executor.kinds() == ["summary"]
+    assert ran.code == 0
+
+
+def test_a_summary_whose_record_was_saved_is_not_written_again(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    crash_writing(monkeypatch, "records/summary.json", after=True)
+    with pytest.raises(Crash):
+        runner()
+    monkeypatch.undo()
+    leave_dead_lock(runner.root)
+
+    ran = runner()
+
+    assert ran.executor.sessions == []
+    assert ran.code == 0
+    assert "## Executive summary" in (runner.root / "out" / "00-summary.md").read_text()

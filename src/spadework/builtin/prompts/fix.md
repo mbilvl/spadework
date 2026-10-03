@@ -24,11 +24,14 @@ it has research. Every file there is read-only except your output file.
 
 ## The result
 
-Return your result for the document as it now stands: its status, a
-one-line summary, up to five key facts, and its decisions, open questions,
-assumptions, risks and gaps. The document and the result must agree. Then:
+Return your result for the document as it now stands: a one-line summary,
+up to five key facts, and its decisions, open questions, assumptions, risks
+and gaps, as for a draft. The document and the result must agree.
 
-- `applied`: the ids of the findings you carried out.
+- `status`: `ok`, or `partial` when part of the document's task is still not
+  done; say what in `gaps`.
+- `applied`: the ids of the findings you carried out, as the prompt gives
+  them (F1, F2, …).
 - `rejected`: each finding you did not carry out, with the reason.
 
 Every finding in the prompt is either applied or rejected, once.

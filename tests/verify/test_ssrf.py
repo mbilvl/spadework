@@ -130,6 +130,16 @@ BLOCKED_LITERALS = [
     pytest.param("https://router.home.arpa/", SPECIAL, id="special-home-arpa"),
     pytest.param("http://abcdef.onion/", SPECIAL, id="special-onion"),
     pytest.param("https://name.alt/", SPECIAL, id="special-alt"),
+    pytest.param("http://nas.lan/", SPECIAL, id="special-lan"),
+    pytest.param("http://lan/", SPECIAL, id="special-bare-lan"),
+    pytest.param("http://intranet./", SPECIAL, id="special-bare-intranet"),
+    pytest.param("http://router.home/", SPECIAL, id="special-home"),
+    pytest.param("https://wiki.acme.corp/", SPECIAL, id="special-corp"),
+    pytest.param("https://Wiki.CORP./", SPECIAL, id="special-corp-case-dot"),
+    pytest.param("https://portal.intranet/", SPECIAL, id="special-intranet"),
+    pytest.param("https://files.private/", SPECIAL, id="special-private"),
+    pytest.param("http://1.0.0.127.in-addr.arpa/", SPECIAL, id="special-in-addr"),
+    pytest.param("http://1.0.ip6.arpa/", SPECIAL, id="special-ip6-arpa"),
 ]
 
 
@@ -305,7 +315,7 @@ class TestLocalAddresses:
             vet("http://168.63.129.16/?comp=versions", resolver)
 
     @pytest.mark.parametrize(
-        "url", ["http://intranet/", "http://intranet./", "http://WIKI:8080/x"]
+        "url", ["http://fileserver/", "http://fileserver./", "http://WIKI:8080/x"]
     )
     def test_single_label_names_are_blocked(self, url: str, resolver: Resolver) -> None:
         with pytest.raises(Blocked, match="full domain name"):
@@ -377,3 +387,13 @@ def test_long_hosts_are_shortened_in_messages(resolver: Resolver) -> None:
     with pytest.raises(Blocked) as blocked:
         vet(f"http://{name}/", resolver)
     assert len(blocked.value.reason) < 100
+
+
+@pytest.mark.parametrize(
+    "host", ["lan.example.com", "corp.example.com", "home.example.com", "arpa.com"]
+)
+def test_special_use_labels_elsewhere_in_a_name_are_fine(host: str) -> None:
+    resolver = Resolver({host: [PUBLIC]})
+
+    assert vet(f"https://{host}/", resolver).addresses == (PUBLIC,)
+    assert resolver.calls == [f"{host}."]

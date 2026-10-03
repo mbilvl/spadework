@@ -215,4 +215,5 @@ The whole pack as data, for scripts and for later phases:
 | `assumptions`, `gaps` | `{task, assumption}`, `{task, gap}` |
 | `sources` | `{id, task, url, title, publisher, accessed, quote, claim, cited, verification, verification_detail, checked_at, final_url}` |
 
-`versions` come from the run that wrote the summary.
+`versions` come from the run that wrote the summary, and `generated_at`
+changes only when the rest of the file does.

@@ -65,6 +65,7 @@ from spadework.engine.store import (
     draft_record_name,
     read_draft,
     read_research,
+    read_summary,
     research_record_name,
     state_dir,
     work_path,
@@ -433,9 +434,7 @@ class _Run:
                 if self.state.review is None and summary_owed(self.project, self.state):
                     # The last summary failed, or there never was one: only
                     # the summary and the render are owed.
-                    self.state.review = ReviewProgress(
-                        run_id=self.run_id, reviewed=True
-                    )
+                    self.state.review = self._summary_only()
                 self.save_state()
                 for task_id in self.planned.to_run:
                     self._task(self.playbook.task(task_id))
@@ -846,6 +845,21 @@ class _Run:
 
     def _pinned(self) -> frozenset[str]:
         return self.planned.pinned - self._replaced()
+
+    def _summary_only(self) -> ReviewProgress:
+        """Progress for a run that owes only the summary and the render.
+
+        The last summary's findings for a person are kept for the documents
+        a person still has edited: no review runs to find them again.
+        """
+        record = read_summary(self.root)
+        pinned = self._pinned()
+        kept = [] if record is None else record.pinned_findings
+        return ReviewProgress(
+            run_id=self.run_id,
+            reviewed=True,
+            pinned_findings=[f for f in kept if f.task in pinned],
+        )
 
     def _review(self) -> None:
         """The review rounds and the summary, when an output changed."""

@@ -23,7 +23,7 @@ from spadework.engine.store import ResearchRecord
 from spadework.engine.verification import VerificationResult
 from spadework.errors import ExitCode
 from spadework.executors.base import SessionResult, SessionSpec
-from spadework.executors.fake import research_result
+from spadework.executors.fake import draft_result, research_result
 from spadework.keys import hash_file
 from spadework.project import load_project
 from spadework.records import ResearchResult
@@ -377,6 +377,30 @@ def test_pack_json(runner: Runner) -> None:
     assert source["verification_detail"] == "blocked: special-use domain"
     assert source["final_url"] is None
     assert source["quote"].startswith("Most of the listed providers")
+
+
+def test_pack_json_keeps_its_time_until_its_data_changes(
+    runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner()
+    first = pack(runner)["generated_at"]
+    (runner.root / "out" / "02-landscape.md").unlink()
+    monkeypatch.setattr(
+        "spadework.engine.run.utc_timestamp", lambda *args: "2030-01-01T00:00:00Z"
+    )
+
+    ran = runner()
+
+    # Only the deleted document is written: pack.json's data is the same.
+    assert ran.finished.rendered == ("out/02-landscape.md",)
+    assert pack(runner)["generated_at"] == first
+    (runner.root / "inputs" / "note.md").write_text("# Note\n")
+    # No review: the fake's fix would restore the original record.
+    runner(
+        {"overview:draft": {"structured": draft_result("Other overview")}},
+        review=False,
+    )
+    assert pack(runner)["generated_at"] == "2030-01-01T00:00:00Z"
 
 
 def test_documents_not_produced_are_listed_with_their_state(

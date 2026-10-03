@@ -554,3 +554,50 @@ def test_json_reports_any_failure_before_the_run_as_an_error_event(
     assert event["ok"] is False
     assert event["error"]["message"] == message
     assert event["error"]["exit_code"] == code
+
+
+def test_force_only_replaces_a_persons_edits_end_to_end(
+    cli: Invoke, quickstart: Path
+) -> None:
+    assert cli("run", "-q", "-C", quickstart).exit_code == 0
+    path = quickstart / "out" / "01-landscape.md"
+    path.write_text("# Landscape\n\nMy own notes.\n")
+    assert "  landscape  pinned" in cli("status", "-C", quickstart).stdout
+
+    # Without --force, the edits stand and nothing runs.
+    kept = cli("run", "--only", "landscape", "-C", quickstart)
+    assert kept.exit_code == 0
+    assert kept.stdout.endswith("up to date\n")
+    assert "warning: task 'landscape' is pinned" in kept.stderr
+    assert path.read_text() == "# Landscape\n\nMy own notes.\n"
+
+    replaced = cli("run", "--force", "--only", "landscape", "--json", "-C", quickstart)
+
+    assert replaced.exit_code == 0
+    events = ndjson(replaced.stdout)
+    assert events[0]["warnings"] == [
+        {"message": "--force replaces your edits to out/01-landscape.md", "hint": None}
+    ]
+    sessions = [
+        (e["task"], e["kind"]) for e in events if e["event"] == "session_started"
+    ]
+    # The research is reused; the review sees the new document.
+    assert sessions[0] == ("landscape", "draft")
+    assert (None, "summary") in sessions
+    end = events[-1]
+    assert end["tasks"]["landscape"] == "fresh"
+    assert "out/01-landscape.md" in end["rendered"]
+    text = path.read_text()
+    assert "My own notes." not in text
+    assert text.startswith("# Landscape\n")
+    assert "\n## Sources\n" in text
+    pack = json.loads((quickstart / "out" / "pack.json").read_text())
+    assert pack["documents"][0]["state"] == "fresh"
+    summary = (quickstart / "out" / "00-summary.md").read_text()
+    assert (
+        "| [01-landscape.md](01-landscape.md): Landscape of comparables | fresh |"
+        in summary
+    )
+    assert "edited by a person" not in summary
+    assert "  landscape  fresh" in cli("status", "-C", quickstart).stdout
+    assert cli("run", "-C", quickstart).stdout.endswith("up to date\n")

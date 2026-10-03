@@ -111,7 +111,12 @@ for round in 1..rounds:
 - A round starts only if the time left covers a critic, a fix and the
   summary. If the budget or time for the next critic or fix is not there, or
   a review session used what was left of the budget, the review ends and the
-  summary still runs. If the critic fails, the review ends.
+  summary still runs. A time stop inside the review ends it the same way,
+  when the summary still fits. If the critic fails, the review ends, and so
+  does a round that changed no document.
+- The review's sessions keep a slot of time for the summary: their timeout
+  is at most the time left minus 30 s minus 60 s. A repair after a fix runs
+  only if there is room for it and the summary; otherwise the fix stands.
 - Targets match file names ignoring case, with a leading `out/` allowed. A
   finding that names a task with no document is dropped.
 
@@ -119,7 +124,9 @@ for round in 1..rounds:
 
 The summary runs at the end of any run that changed an output, or resumed
 one that had, or when the pack has no summary (never written, or the last
-one failed). If the session fails, `00-summary.md` holds only the
+one failed). A run that only retries the summary keeps the last summary's
+findings for documents a person still has edited. If the session fails,
+`00-summary.md` holds only the
 code-written parts and a note, the outcome is `partial`, and the next run
 writes it again. The session
 writes the prose parts of `00-summary.md`: an executive summary of at most 12
@@ -190,7 +197,10 @@ skipped in this run, even when a person's edits stand in for it.
   the fixes done) is persisted from the first output a run changes until the
   pack is rendered. If a run is interrupted and restarted, it resumes the
   review, summary and render, even when nothing is stale, and does not
-  redraft fresh tasks.
+  redraft fresh tasks. A fixed document is marked done, with its hash,
+  before it is written, so a run that stops in between never fixes it
+  again. A critic or summary record saved by a run that stopped before
+  noting it is used rather than paid for twice.
 - **Lock.** `.spadework/lock` is created with `O_EXCL` and holds the pid,
   the host and the start time. A lock whose pid is dead on the same host is
   reclaimed with a warning. Otherwise the CLI exits `7`. A lock file that

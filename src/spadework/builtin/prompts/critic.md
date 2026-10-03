@@ -34,7 +34,8 @@ to a fixer, who works on one document at a time.
 ## Findings
 
 - One finding per change. `target` is the file name of the document to
-  change, exactly as the prompt lists it.
+  change, exactly as the prompt lists it. `kind` is the category in brackets
+  above.
 - `instruction` says what to change, precisely enough to carry out without
   asking. The fixer sees only that document, its sources, the brief and the
   inputs, so restate anything it needs from another document.

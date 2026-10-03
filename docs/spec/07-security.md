@@ -123,7 +123,9 @@ folder must not be inside the playbook folder, so a template cannot include
 The verifier allows only `http` and `https` URLs without credentials, and
 refuses single-label host names and special-use names (`.example`,
 `.invalid`, `.test`, `.localhost`, `.local`, `.internal`, `.home.arpa`,
-`.onion`, `.alt`, and the bare labels `example`, `invalid`, `test` and
+`.onion`, `.alt`, the home and corporate network suffixes `.lan`, `.home`,
+`.corp`, `.intranet` and `.private`, the reverse-DNS zones `.in-addr.arpa`
+and `.ip6.arpa`, and the bare labels `example`, `invalid`, `test` and
 `localhost`) without any DNS lookup; the guard's WebFetch check refuses the
 same names, offline and before the caps. It resolves the name as an absolute name
 (so DNS search domains never apply), and every address must pass the

@@ -16,7 +16,6 @@ table cells of its own.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -395,10 +394,6 @@ def pack_document(
         "gaps": listed["gaps"],
         "sources": listed["sources"],
     }
-
-
-def pack_json(**arguments: Any) -> str:
-    return json.dumps(pack_document(**arguments), indent=2, ensure_ascii=False) + "\n"
 
 
 # 00-summary.md

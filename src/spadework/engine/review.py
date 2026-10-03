@@ -6,20 +6,26 @@ owed (``state.review``):
     for round in 1..rounds:
         stop if the budget or time left cannot cover a critic plus one fix
         critic → findings, plus a finding for each validator failure
+        record the findings against documents a person edited, for the summary
         stop if the verdict is ship and no validator is failing
-        for each document with findings, in task order:
-            edited by a person → record the findings for the summary
-            fix → validators → one repair if they fail
+        for each other document with findings, in task order:
+            fix → validators → one repair if they fail and there is room
+        stop if the round changed no document
     summary
 
 Each step is saved as it ends (``ReviewProgress``), so a resumed run picks
 up where the last one stopped: a round whose critic ran uses its findings, a
 finished fix is not done again, a repair still owed is done alone, and a
-finished summary leaves only the render.
+finished summary leaves only the render. A fixed document is marked done,
+with its hash, before it is written, so a run that stops in between never
+fixes it again. A critic or summary record saved by a run that stopped before
+noting it is used, not paid for twice.
 
-The review never stops the run for money: when the budget cannot cover the
-next critic or fix, the review ends and the summary, whose estimate was kept
-back from the start, still runs.
+The review never takes the summary's money or time. Its sessions keep a slot
+of time for the summary free, and when the budget or time left cannot cover
+the next critic, fix or repair, or a review session uses up what was left of
+either, the review ends and the summary, whose estimate was kept back from
+the start, still runs.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from spadework import __version__
 from spadework.brief import BRIEF_FILE
@@ -48,6 +55,7 @@ from spadework.engine.prompts import (
     writer_system_prompt,
 )
 from spadework.engine.session import (
+    MIN_SESSION_S,
     Clock,
     RunLimits,
     RunStopped,
@@ -70,12 +78,14 @@ from spadework.engine.store import (
     read_research,
     read_summary,
     read_work,
+    work_path,
     write_record,
     write_work,
 )
 from spadework.errors import SpadeworkError
 from spadework.executors.base import SessionKind
 from spadework.inputs import INPUTS_DIR, InputFile, match_inputs, scan_inputs
+from spadework.keys import hash_bytes
 from spadework.manifest import RunManifest, load_manifest
 from spadework.playbook import Task
 from spadework.project import Project
@@ -88,7 +98,13 @@ from spadework.records import (
 )
 from spadework.render import ResearchFindings, StagedFile
 from spadework.render import Source as SourceView
-from spadework.state import ReviewFinding, ReviewProgress, State
+from spadework.state import (
+    PendingWrite,
+    ReviewFinding,
+    ReviewProgress,
+    State,
+    file_hash,
+)
 from spadework.validators import (
     ValidatorResult,
     can_repair,
@@ -157,17 +173,20 @@ class Review:
     def run(self) -> None:
         if self.state.review is None:
             return
+        self._resume_write()
         if not self._progress().reviewed:
             try:
                 self._rounds()
             except RunStopped as stop:
-                # A session that used what was left of the budget: the
-                # summary's reserve is intact, so the pack still gets one.
-                if stop.outcome != "budget":
+                # A session that used what was left of the budget, or of the
+                # time before the summary's slot: the summary still runs, on
+                # its reserve, if there is time for it.
+                summary_fits = self.limits.session_fits(self.clock.monotonic())
+                if stop.outcome not in ("budget", "time") or not summary_fits:
                     raise
                 self._notice(f"the review stopped: {stop.message}")
             self._set(self._progress().model_copy(update={"reviewed": True}))
-        if not self._progress().summarised:
+        if not self._progress().summarised and not self._adopt_summary():
             self._summary()
 
     # Progress.
@@ -191,16 +210,7 @@ class Review:
         while round_ <= self.rounds:
             progress = self._progress()
             if progress.round != round_:
-                self._set(
-                    progress.model_copy(
-                        update={
-                            "round": round_,
-                            "critic": None,
-                            "fixed": [],
-                            "repairs": [],
-                        }
-                    )
-                )
+                self._set(progress.start_round(round_))
             critic = self._critic_of(round_)
             if critic is None:
                 return
@@ -209,6 +219,13 @@ class Review:
                 self._notice(f"review round {round_}: the critic's verdict is ship")
                 return
             if not self._fixes(critic):
+                return
+            if not self._progress().changed:
+                # Another critic would see the same pack: every finding was
+                # on a document a person edited, or every fix failed.
+                self._notice(
+                    f"review round {round_} changed no document, so the review stopped"
+                )
                 return
             round_ += 1
 
@@ -220,10 +237,17 @@ class Review:
     def _critic_of(self, round_: int) -> CriticRecord | None:
         """The round's findings: from its critic record, or a new critic."""
         progress = self._progress()
-        if progress.critic is not None:
-            record = read_critic(self.root, progress.critic)
-            if record is not None and record.round == round_:
-                return record
+        name = progress.critic or critic_record_name(round_)
+        record = read_critic(self.root, name)
+        if (
+            record is not None
+            and record.round == round_
+            and (progress.critic is not None or record.review == progress.run_id)
+        ):
+            if progress.critic is None:
+                # Saved by a run that stopped before it noted so.
+                self._set(progress.with_critic(name))
+            return record
         reason = self._room(CRITIC_USD + FIX_USD, 2)
         if reason is not None:
             self._notice(f"the review stopped before round {round_}: {reason}")
@@ -258,6 +282,7 @@ class Review:
                 files=tuple(files),
                 round=round_,
                 max_findings=limit,
+                keep_s=MIN_SESSION_S,
             )
         )
         if not isinstance(outcome.record, CriticResult):
@@ -273,6 +298,7 @@ class Review:
             self.report(ev.Notice(f"review round {round_}: dropped {reason}"))
         record = CriticRecord(
             run_id=self.run_id,
+            review=self._progress().run_id,
             round=round_,
             result=outcome.record,
             findings=findings,
@@ -317,16 +343,20 @@ class Review:
                 or (task.id in progress.fixed and task.id not in progress.repairs)
             ):
                 continue
-            repair = task.id in progress.repairs
-            reason = self._room(REPAIR_USD if repair else FIX_USD, 1)
+            if task.id in progress.repairs:
+                request = self._fix_request(task, findings, critic.round)
+                if request is None:
+                    self._set(progress.with_repaired(task.id))
+                else:
+                    self._repair(task, request)
+                continue
+            reason = self._room(FIX_USD, 1)
             if reason is not None:
                 self._notice(f"the review stopped in round {critic.round}: {reason}")
                 return False
             request = self._fix_request(task, findings, critic.round)
             if request is None:
-                self._set(self._progress().with_fixed(task.id))
-            elif repair:
-                self._repair(task, request)
+                self._set(progress.with_fixed(task.id))
             else:
                 self._fix(task, request)
         return True
@@ -382,6 +412,7 @@ class Review:
             check=check,
             round=round_,
             findings={finding.id: finding.instruction for finding in findings},
+            keep_s=MIN_SESSION_S,
         )
 
     def _fix(self, task: Task, request: SessionRequest) -> None:
@@ -396,79 +427,156 @@ class Review:
             )
             self._set(self._progress().with_fixed(task.id))
             return
-        self._record(task, outcome, "fix")
         repair = can_repair(outcome.validators)
-        self._set(self._progress().with_fixed(task.id, repair=repair))
+        self._keep(
+            task, outcome, "fix", self._progress().with_fixed(task.id, repair=repair)
+        )
         if repair:
             self._repair(task, request)
 
     def _repair(self, task: Task, fix: SessionRequest) -> None:
-        """One repair of a fixed document whose validators fail."""
+        """One repair of a fixed document whose validators fail, if there is
+        room for it before the summary; otherwise the fix stands as it is."""
         entry = self.state.tasks[task.id]
         failed = failures(entry.validators)
         content = read_work(self.root, task.output)
-        if failed and content is not None:
-            repaired = self.sessions.run(
-                SessionRequest(
-                    kind=SessionKind.REPAIR,
-                    task=task.id,
-                    prompt=repair_prompt(task, fix.prompt, failed),
-                    system_append=writer_system_prompt(
-                        "repair", self.project.playbook, self.project.brief
-                    ),
-                    model=fix.model,
-                    key=fix.key,
-                    estimate_usd=REPAIR_USD,
-                    output=task.output,
-                    files=fix.files,
-                    seed=content,
-                    check=fix.check,
-                    round=fix.round,
-                )
+        if not failed or content is None:
+            self._set(self._progress().with_repaired(task.id))
+            return
+        reason = self._room(REPAIR_USD, 1)
+        if reason is not None:
+            self._notice(
+                f"{task.id}: the repair after the fix was skipped: {reason}",
+                task=task.id,
             )
-            if repaired.ok:
-                self._record(task, repaired, "repair")
-            else:
-                self.report(
-                    ev.Notice(
-                        f"{task.id}: the repair after the fix failed "
-                        f"({repaired.error}); keeping the fix",
-                        task=task.id,
-                    )
-                )
+            self._set(self._progress().with_repaired(task.id))
+            return
+        repaired = self.sessions.run(
+            SessionRequest(
+                kind=SessionKind.REPAIR,
+                task=task.id,
+                prompt=repair_prompt(task, fix.prompt, failed),
+                system_append=writer_system_prompt(
+                    "repair", self.project.playbook, self.project.brief
+                ),
+                model=fix.model,
+                key=fix.key,
+                estimate_usd=REPAIR_USD,
+                output=task.output,
+                files=fix.files,
+                seed=content,
+                check=fix.check,
+                round=fix.round,
+                keep_s=MIN_SESSION_S,
+            )
+        )
+        if repaired.ok:
+            self._keep(
+                task, repaired, "repair", self._progress().with_repaired(task.id)
+            )
+            return
+        self.report(
+            ev.Notice(
+                f"{task.id}: the repair after the fix failed ({repaired.error}); "
+                "keeping the fix",
+                task=task.id,
+            )
+        )
         self._set(self._progress().with_repaired(task.id))
 
-    def _record(self, task: Task, outcome: SessionOutcome, kind: str) -> None:
-        """Keep a fixed (or repaired) document. Its key does not change."""
+    def _keep(
+        self,
+        task: Task,
+        outcome: SessionOutcome,
+        kind: Literal["fix", "repair"],
+        progress: ReviewProgress,
+    ) -> None:
+        """Keep a fixed (or repaired) document. Its key does not change.
+
+        ``progress`` marks the fix (or repair) done. It is saved, with the
+        new document's hash, before the document is written: a run that
+        stops in between never does the fix again (``_resume_write``).
+        """
         record = outcome.record
         assert isinstance(record, DraftResult)
         assert outcome.content is not None
-        entry = self.state.tasks[task.id]
-        assert entry.output is not None
         result = record
         if isinstance(record, FixResult):
             result = DraftResult.model_validate(
                 record.model_dump(exclude={"applied", "rejected"})
             )
-        digest = write_work(self.root, task.output, outcome.content)
+        pending = PendingWrite(
+            task=task.id,
+            kind=kind,
+            hash=hash_bytes(outcome.content),
+            validators=list(outcome.validators),
+            result=result,
+        )
+        self._set(progress.model_copy(update={"writing": pending}))
+        write_work(self.root, task.output, outcome.content)
+        self._recorded(pending)
+
+    def _recorded(self, pending: PendingWrite) -> None:
+        """Record a document written into ``work/``, and clear the write."""
+        entry = self.state.tasks[pending.task]
+        assert entry.output is not None
         write_record(
             self.root,
-            draft_record_name(task.id),
+            draft_record_name(pending.task),
             DraftRecord(
-                task=task.id,
+                task=pending.task,
                 key=entry.output.key,
                 run_id=self.run_id,
-                kind="repair" if kind == "repair" else "fix",
-                result=result,
+                kind=pending.kind,
+                result=pending.result,
             ),
         )
+        changed = entry.output.hash != pending.hash
         entry = self.state.record_fix(
-            task.id, output_hash=digest, validators=outcome.validators
+            pending.task, output_hash=pending.hash, validators=pending.validators
         )
-        failed = [r.name for r in outcome.validators if not r.ok]
+        progress = self._progress()
+        self._set(
+            progress.model_copy(
+                update={"writing": None, "changed": progress.changed or changed}
+            )
+        )
+        failed = [r.name for r in pending.validators if not r.ok]
         reason = f"validators failed: {', '.join(failed)}" if failed else None
         self.report(
-            ev.TaskFinished(task.id, entry.status, reason, tuple(outcome.validators))
+            ev.TaskFinished(
+                pending.task, entry.status, reason, tuple(pending.validators)
+            )
+        )
+
+    def _resume_write(self) -> None:
+        """Finish recording a fixed document that a stopped run wrote, or drop
+        it if the run stopped before writing it. Either way it is not fixed
+        again."""
+        pending = self._progress().writing
+        if pending is None:
+            return
+        try:
+            task = self.project.playbook.task(pending.task)
+        except KeyError:
+            task = None
+        entry = self.state.tasks.get(pending.task)
+        if (
+            task is not None
+            and entry is not None
+            and entry.output is not None
+            and file_hash(work_path(self.root, task.output)) == pending.hash
+        ):
+            self._recorded(pending)
+            return
+        progress = self._progress().with_repaired(pending.task)
+        self._set(progress.model_copy(update={"writing": None}))
+        self.report(
+            ev.Notice(
+                f"{pending.task}: the last run stopped before it saved the "
+                f"{pending.kind}, so the document stays as it was",
+                task=pending.task,
+            )
         )
 
     # The summary.
@@ -514,6 +622,7 @@ class Review:
             SUMMARY_RECORD,
             SummaryRecord(
                 run_id=self.run_id,
+                review=self._progress().run_id,
                 result=result,
                 error=error,
                 pinned_findings=self._progress().pinned_findings,
@@ -521,6 +630,18 @@ class Review:
             ),
         )
         self._set(self._progress().model_copy(update={"summarised": True}))
+
+    def _adopt_summary(self) -> bool:
+        """Whether this review's summary was saved by a run that stopped
+        before it noted so; if it was, it is not written again."""
+        record = read_summary(self.root)
+        if record is None or record.review != self._progress().run_id:
+            return False
+        if record.result is not None and summary_prose(self.root) is None:
+            return False
+        self.summary_error = record.error
+        self._set(self._progress().model_copy(update={"summarised": True}))
+        return True
 
     def _produced(self) -> Produced:
         from spadework.engine.status import run_manifests

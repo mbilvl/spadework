@@ -468,10 +468,13 @@ def _checked_url(raw: object) -> str | None:
     return name
 
 
-# Special-use domain names (RFC 6761, RFC 8375, RFC 7686, RFC 9476, and
-# .internal, which ICANN reserved for private use). They never name a public
-# site, so they are refused without a DNS lookup: a resolver may answer them
-# with a local address, or leak the lookup to the local network.
+# Names that never name a public site: the special-use names (RFC 6761,
+# RFC 8375, RFC 7686, RFC 9476), .internal (reserved by ICANN for private
+# use), the suffixes home and office networks use, which ICANN's
+# name-collision work found leaking to the root (.lan, .home, .corp,
+# .intranet, .private), and the reverse-DNS zones. They are refused without a
+# DNS lookup: a resolver may answer them with a local address, or leak the
+# lookup to the local network.
 SPECIAL_USE_DOMAINS = (
     "example",
     "invalid",
@@ -482,6 +485,13 @@ SPECIAL_USE_DOMAINS = (
     "home.arpa",
     "onion",
     "alt",
+    "lan",
+    "home",
+    "corp",
+    "intranet",
+    "private",
+    "in-addr.arpa",
+    "ip6.arpa",
 )
 
 

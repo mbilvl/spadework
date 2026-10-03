@@ -27,6 +27,7 @@ from spadework.errors import SpadeworkError
 from spadework.keys import TaskMaterial, hash_file, stale_reasons
 from spadework.models import SCHEMA_VERSION, SchemaVersion, StrictModel
 from spadework.plan import TaskState, TaskStatus
+from spadework.records import DraftResult
 from spadework.validators import ValidatorResult
 
 STATE_DIR = ".spadework"
@@ -100,6 +101,23 @@ class ReviewFinding(StrictModel):
     round: int = Field(default=0, ge=0)
 
 
+class PendingWrite(StrictModel):
+    """A fixed (or repaired) document about to be written into ``work/``.
+
+    It is saved first, with the fix marked done, so a run that stops before
+    the document is recorded never fixes it again: the next run finishes the
+    recording if the file holds these bytes, and drops it otherwise.
+    """
+
+    task: str
+    kind: Literal["fix", "repair"]
+    hash: str
+    """Of the new document's bytes."""
+    validators: list[ValidatorResult]
+    result: DraftResult
+    """The session's result for the new document, for its draft record."""
+
+
 class ReviewProgress(StrictModel):
     """How far a run's review has got. Cleared once the run has rendered.
 
@@ -120,6 +138,10 @@ class ReviewProgress(StrictModel):
     """Tasks whose fix is done in this round, in order."""
     repairs: list[str] = Field(default_factory=list)
     """Fixed tasks whose validators failed, and whose repair is still owed."""
+    changed: bool = False
+    """A fix or repair changed a document in this round."""
+    writing: PendingWrite | None = None
+    """A fixed document being written, until it is recorded."""
     reviewed: bool = False
     """The review rounds are over."""
     summarised: bool = False
@@ -128,12 +150,16 @@ class ReviewProgress(StrictModel):
     """Findings against documents a person edited, for the summary."""
 
     def next_round(self) -> ReviewProgress:
+        return self.start_round(self.round + 1)
+
+    def start_round(self, round_: int) -> ReviewProgress:
         return self.model_copy(
             update={
-                "round": self.round + 1,
+                "round": round_,
                 "critic": None,
                 "fixed": [],
                 "repairs": [],
+                "changed": False,
             }
         )
 

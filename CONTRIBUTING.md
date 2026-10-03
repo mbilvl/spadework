@@ -157,6 +157,21 @@ git push --force-with-lease
   anything a user would notice.
 - CI must be green, and every commit signed off.
 
+## Releasing (maintainers)
+
+Releases are published by `.github/workflows/release.yml` through PyPI
+trusted publishing: no tokens are stored anywhere.
+
+1. Set `__version__` in `src/spadework/__init__.py`.
+2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD`
+   and add a fresh `## [Unreleased]` above it. The release notes are taken
+   from that section.
+3. Commit, push to `main`, and wait for CI to pass.
+4. Tag and push the tag: `git tag -a vx.y.z -m "spadework x.y.z"`, then
+   `git push origin vx.y.z`. The workflow checks that the tag matches the
+   version, publishes to PyPI from the `pypi` environment, and creates the
+   GitHub release.
+
 ## Reporting bugs
 
 Open an issue using the bug template. Include `spadework --version`, your

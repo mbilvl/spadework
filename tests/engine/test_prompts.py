@@ -197,6 +197,13 @@ def test_the_review_base_prompts_carry_their_contracts() -> None:
     assert "You may reject a finding" in fix
     assert "Never invent names, numbers, prices, dates, quotes or URLs" in fix
     assert "Never write a rejection, or anything about the review, into the" in fix
+    # Each field of the result schemas is explained.
+    assert "- `status`: `ok`, or `partial` when part of the document's task" in fix
+    assert "`applied`: the ids of the findings you carried out" in fix
+    assert "`kind` is the category in brackets" in critic
+    for field in ("`verdict`", "`findings`", "`biggest_gap`"):
+        assert field in critic
+    assert "it merges: at least one, each once, such as `stack:Q1`" in summary
     # The summary's structure.
     assert "`## Executive summary`: at most 12 bullets" in summary
     assert "`## Key decisions`: the decisions the pack recommends, each with its\n" in (

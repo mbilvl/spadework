@@ -160,24 +160,165 @@ def test_verify_by_default_never_fetches_special_use_names(
     assert {s["detail"] for s in document["sources"]} == {"blocked: special-use domain"}
 
 
+def hold_lock(root: Path) -> LockOwner:
+    owner = LockOwner(os.getppid(), socket.gethostname(), "2026-09-27T21:04:11Z")
+    lock = root / ".spadework" / "lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_bytes(owner.to_bytes())
+    return owner
+
+
+@pytest.mark.parametrize("json_output", [False, True])
 def test_verify_exits_7_while_a_run_holds_the_project(
-    cli: Invoke, quickstart: Path, stub: None
+    cli: Invoke, quickstart: Path, stub: None, json_output: bool
 ) -> None:
     cli("run", "-q", "-C", quickstart)
-    lock = quickstart / ".spadework" / "lock"
-    lock.write_bytes(
-        LockOwner(os.getppid(), socket.gethostname(), "2026-09-27T21:04:11Z").to_bytes()
-    )
+    sources = quickstart / "out" / "sources.md"
+    before = sources.read_bytes()
+    owner = hold_lock(quickstart)
+
+    args = ["verify", "-C", quickstart] + (["--json"] if json_output else [])
+    result = cli(*args)
+
+    assert result.exit_code == 7
+    # Nothing was checked or written, and the lock is left to its owner.
+    assert sources.read_bytes() == before
+    assert (quickstart / ".spadework" / "lock").read_bytes() == owner.to_bytes()
+    message, hint = result.stderr.splitlines()
+    assert message.startswith("error: ")
+    assert hint
+    if json_output:
+        document = json.loads(result.stdout)
+        assert document["schema_version"] == 1
+        assert document["ok"] is False
+        assert document["error"]["exit_code"] == 7
+        assert document["error"]["message"] == message.removeprefix("error: ")
+    else:
+        assert result.stdout == ""
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_verify_exits_3_for_an_invalid_project(
+    cli: Invoke, quickstart: Path, json_output: bool
+) -> None:
+    (quickstart / "brief.md").unlink()
+
+    args = ["verify", "-C", quickstart] + (["--json"] if json_output else [])
+    result = cli(*args)
+
+    assert result.exit_code == 3
+    assert result.stderr.startswith("error: ")
+    if json_output:
+        document = json.loads(result.stdout)
+        assert (document["ok"], document["error"]["exit_code"]) == (False, 3)
+    assert not (quickstart / ".spadework" / "lock").exists()
+
+
+def test_verify_exits_1_for_an_unexpected_error(
+    cli: Invoke, quickstart: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli("run", "-q", "-C", quickstart)
+
+    class Broken(Stub):
+        def verify_sources(
+            self, sources: Sequence[Source], *, time_limit: float | None = None
+        ) -> Mapping[str, Found]:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("spadework.engine.reverify.NetworkVerifier", Broken)
 
     result = cli("verify", "--json", "-C", quickstart)
 
-    assert result.exit_code == 7
-    assert json.loads(result.stdout)["error"]["exit_code"] == 7
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["error"]["message"] == (
+        "unexpected error: RuntimeError: boom"
+    )
+    assert not (quickstart / ".spadework" / "lock").exists()
 
 
-def test_verify_exits_3_for_an_invalid_project(cli: Invoke, quickstart: Path) -> None:
-    (quickstart / "brief.md").unlink()
+def test_verify_json_shape(cli: Invoke, quickstart: Path, stub: None) -> None:
+    cli("run", "-q", "-C", quickstart)
+    path = quickstart / "out" / "01-landscape.md"
+    path.write_text(path.read_text() + "\nMine.\n")
 
-    result = cli("verify", "-C", quickstart)
+    document = json.loads(cli("verify", "--json", "-C", quickstart).stdout)
 
-    assert result.exit_code == 3
+    assert list(document) == [
+        "schema_version",
+        "ok",
+        "counts",
+        "sources",
+        "written",
+        "kept",
+        "render_owed",
+        "warnings",
+    ]
+    assert list(document["counts"]) == [
+        "verified",
+        "quote_not_found",
+        "unreachable",
+        "unsupported",
+        "unchecked",
+    ]
+    assert len(document["sources"]) == 5
+    assert all(
+        list(source)
+        == ["id", "task", "url", "status", "detail", "checked_at", "final_url"]
+        for source in document["sources"]
+    )
+    assert document["kept"] == ["out/01-landscape.md"]
+    assert document["written"] == [
+        "out/00-summary.md",
+        "out/pack.json",
+        "out/sources.md",
+    ]
+    assert document["warnings"] == []
+
+
+def test_verify_after_an_interrupted_run_leaves_the_render_to_it(
+    cli: Invoke, quickstart: Path, stub: None
+) -> None:
+    import subprocess
+    import sys
+
+    # A real process killed during its fourth session, the first critic.
+    code = f"""
+import os, sys
+from spadework.executors.fake import FakeExecutor
+
+calls = []
+original = FakeExecutor.run
+
+def run(self, spec, events):
+    calls.append(spec.task)
+    if len(calls) == 4:
+        os._exit(137)
+    return original(self, spec, events)
+
+FakeExecutor.run = run
+from spadework.cli import app
+sys.argv = ["spadework", "run", "-q", "-C", {str(quickstart)!r}]
+app()
+"""
+    env = {**os.environ, "SPADEWORK_EXECUTOR": "fake"}
+    killed = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, check=False
+    )
+    assert killed.returncode == 137
+
+    result = cli("verify", "--json", "-C", quickstart)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["render_owed"] is True
+    assert document["written"] == []
+    assert not (quickstart / "out").exists()
+    assert "the last run did not finish" not in result.stderr  # JSON: no prose
+    human = cli("verify", "-C", quickstart)
+    assert (
+        "warning: the last run did not finish, so only the records were updated"
+        in human.stderr
+    )
+    resumed = cli("run", "-q", "-C", quickstart)
+    assert resumed.exit_code == 0
+    assert "| ✓ verified |" in (quickstart / "out" / "01-landscape.md").read_text()

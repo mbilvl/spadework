@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
@@ -128,37 +128,25 @@ def _reporting(ui: Ui, *, json_output: bool = False) -> Iterator[None]:
     except typer.Exit:
         raise
     except SpadeworkError as exc:
-        if json_output:
-            from spadework.views import error_document
-
-            ui.json(error_document(exc))
-        ui.error(exc)
-        raise typer.Exit(exc.exit_code) from None
+        _fail(ui, exc, json_output=json_output)
     except KeyboardInterrupt:
         ui.err.print("interrupted")
         raise typer.Exit(ExitCode.INTERRUPTED) from None
-    except OSError as exc:
-        # The file system said no: not a bug, so say which path and why.
-        if ui.debug:
-            raise
-        where = _shown(Path(exc.filename)) if exc.filename else "a file"
-        ui.error(
-            SpadeworkError(
-                f"cannot use {where}: {exc.strerror or exc}",
-                "Check that the path exists and that you may read and write it.",
-            )
-        )
-        raise typer.Exit(ExitCode.ERROR) from None
     except Exception as exc:
+        # A file system refusal says which path and why; anything else is a
+        # bug. Either way, --json still gets its error document.
         if ui.debug:
             raise
-        ui.error(
-            SpadeworkError(
-                f"unexpected error: {type(exc).__name__}: {exc}",
-                "Run again with -v to see the traceback. Please report it as a bug.",
-            )
-        )
-        raise typer.Exit(ExitCode.ERROR) from None
+        _fail(ui, _run_error(exc), json_output=json_output)
+
+
+def _fail(ui: Ui, exc: SpadeworkError, *, json_output: bool) -> NoReturn:
+    if json_output:
+        from spadework.views import error_document
+
+        ui.json(error_document(exc))
+    ui.error(exc)
+    raise typer.Exit(exc.exit_code) from None
 
 
 def _shown(path: Path) -> str:

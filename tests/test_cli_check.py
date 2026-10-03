@@ -263,6 +263,37 @@ def test_os_errors_name_the_path_and_are_not_bugs(
     )
 
 
+@pytest.mark.parametrize(
+    ("raised", "message"),
+    [
+        (RuntimeError("boom"), "unexpected error: RuntimeError: boom"),
+        (PermissionError(13, "Permission denied", "brief.md"), "cannot use brief.md"),
+    ],
+)
+def test_json_gets_an_error_document_for_any_failure(
+    cli: Invoke,
+    make_project: MakeProject,
+    monkeypatch: pytest.MonkeyPatch,
+    raised: Exception,
+    message: str,
+) -> None:
+    root = make_project()
+
+    def fail(folder: Path) -> None:
+        raise raised
+
+    monkeypatch.setattr("spadework.project.load_project", fail)
+
+    result = cli("check", "--json", "-C", root)
+
+    assert result.exit_code == 1
+    document = json.loads(result.stdout)
+    assert document["ok"] is False
+    assert document["error"]["exit_code"] == 1
+    assert document["error"]["message"].startswith(message)
+    assert result.stderr.startswith(f"error: {message}")
+
+
 def test_warns_about_large_inputs(cli: Invoke, make_project: MakeProject) -> None:
     result = cli("check", "-C", make_project(inputs={"big.md": "x" * 600_000}))
 

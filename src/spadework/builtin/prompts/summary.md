@@ -36,5 +36,6 @@ on, and how the pack was produced. Do not write those.
 
 - `status`: `ok`, or `partial` when part of the pack could not be summarised.
 - `open_questions`: the questions of your Open questions section, in the same
-  order, each with why it matters and the ids of the questions it merges,
-  such as `stack:Q1`, taken from the list in the prompt.
+  order, each on one line, with why it matters and the ids of the questions
+  it merges: at least one, each once, such as `stack:Q1`, taken from the
+  list in the prompt.
