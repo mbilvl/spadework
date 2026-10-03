@@ -11,6 +11,7 @@ from spadework.validators import (
     ValidatorResult,
     can_repair,
     cited_sources,
+    failure_summary,
     failures,
     run_validators,
 )
@@ -452,3 +453,89 @@ def test_results_serialise_compactly() -> None:
     }
     assert ValidatorResult.model_validate_json(stuck.model_dump_json()) == stuck
     assert ValidatorResult.model_validate_json(ok.model_dump_json()) == ok
+
+
+# Short specifics, for status lines.
+
+
+@pytest.mark.parametrize(
+    ("text", "name", "kwargs", "detail"),
+    [
+        ("# A\n" + "x\n" * 11, "max_lines", {"max_lines": 10}, "12 > 10 lines"),
+        ("# A\n", "min_lines", {"min_lines": 5}, "1 < 5 lines"),
+        ("Intro\n# A\n", "starts_with_h1", {}, "line 1 is not a level-1 heading"),
+        ("", "starts_with_h1", {}, "empty document"),
+        (
+            "# A\n## Cost\n",
+            "required_headings",
+            {"required_headings": ("Cost", "Risks", "Phases")},
+            "missing: Risks, Phases",
+        ),
+        (
+            "# A\nAs an AI, I think.\n",
+            "forbidden_phrases",
+            {"forbidden_phrases": ("as an AI",)},
+            "'as an AI'",
+        ),
+        (
+            "# A\n[S1] [S9] [S7]\n",
+            "citations_resolve",
+            {"sources": 1},
+            "unknown: S9, S7",
+        ),
+        ("# A\n[S1]\n", "min_sources", {"sources": 3, "min_sources": 2}, "1 cited < 2"),
+        ("# A\n", "min_sources", {"sources": 1, "min_sources": 2}, "1 found < 2"),
+    ],
+)
+def test_each_failure_has_a_short_detail(
+    text: str, name: str, kwargs: dict[str, Any], detail: str
+) -> None:
+    settings = {"starts_with_h1": name == "starts_with_h1", **kwargs}
+    if name == "citations_resolve":
+        settings["citations_resolve"] = True
+
+    result = only(text, name, **settings)
+
+    assert not result.ok
+    assert result.detail == detail
+
+
+def test_max_open_questions_detail() -> None:
+    result = only(
+        "# A\n", "max_open_questions", record=_record(4), max_open_questions=2
+    )
+
+    assert result.detail == "4 > 2"
+
+
+def test_failure_summary() -> None:
+    results = [
+        ValidatorResult(name="max_lines", ok=False, message="m", detail="312 > 250"),
+        ValidatorResult(name="starts_with_h1", ok=True),
+        ValidatorResult(name="required_headings", ok=False, message="m"),
+    ]
+
+    assert failure_summary(results) == (
+        "validators failed: max_lines (312 > 250), required_headings"
+    )
+    assert failure_summary(results[1:2]) is None
+
+
+def test_a_detail_is_kept_in_json_only_when_there_is_one() -> None:
+    passed = ValidatorResult(name="max_lines", ok=True)
+    failed = ValidatorResult(name="max_lines", ok=False, message="m", detail="3 > 2")
+
+    assert passed.model_dump() == {"name": "max_lines", "ok": True}
+    assert failed.model_dump() == {
+        "name": "max_lines",
+        "ok": False,
+        "message": "m",
+        "detail": "3 > 2",
+    }
+    # Results recorded before details existed still load.
+    assert (
+        ValidatorResult.model_validate_json(
+            '{"name": "max_lines", "ok": false, "message": "m"}'
+        ).detail
+        is None
+    )

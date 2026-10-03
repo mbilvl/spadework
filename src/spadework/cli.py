@@ -7,26 +7,48 @@ that ``--help`` and ``--version`` stay fast.
 
 from __future__ import annotations
 
-import os
+import posixpath
 import shlex
-from collections.abc import Iterator
+import sys
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
+from typer.core import TyperCommand
 
 from spadework import __version__
-from spadework.console import Ui
-from spadework.errors import ExitCode, SpadeworkError, UsageError
+from spadework.console import Ui, shown
+from spadework.errors import ExitCode, InvalidError, SpadeworkError, UsageError
+
+if TYPE_CHECKING:
+    from spadework.clean import CleanPlan
 
 DEFAULT_PLAYBOOK = "discovery-website"
+CONFIG_FILE = "spadework.toml"
+"""spadework.config.CONFIG_FILE, which this module cannot import cheaply."""
+
+# Lets a command see a stray argument, to suggest -C for it.
+_EXTRA_ARGS: dict[str, Any] = {"allow_extra_args": True}
 
 
-def _examples(*commands: str) -> str:
+def _examples(*commands: str, note: str | None = None) -> str:
     # "\b" stops Click from re-wrapping the paragraph that follows it.
-    return "Examples:\n\n\b\n" + "\n".join(f"  {command}" for command in commands)
+    text = "Examples:\n\n\b\n" + "\n".join(f"  {command}" for command in commands)
+    return text if note is None else f"{note}\n\n{text}"
+
+
+class _PlainUsage(TyperCommand):
+    """A command whose usage line shows a required argument as NAME, not
+    Typer's {NAME}."""
+
+    def collect_usage_pieces(self, ctx: Any) -> list[str]:
+        return [
+            piece[1:-1] if piece.startswith("{") and piece.endswith("}") else piece
+            for piece in super().collect_usage_pieces(ctx)
+        ]
 
 
 app = typer.Typer(
@@ -87,12 +109,47 @@ class GlobalOptions:
     verbose: bool = False
     no_color: bool = False
 
-    def ui(self) -> Ui:
-        return Ui(quiet=self.quiet, verbose=self.verbose, color=not self.no_color)
+    def ui(self, *, for_project: bool = True) -> Ui:
+        """Where the command writes. When ``-C`` names a project other than
+        the current folder, the commands that messages suggest carry it too."""
+        flag = None
+        if for_project and self.project is not None:
+            flag = shown(self.project)
+        return Ui(
+            quiet=self.quiet,
+            verbose=self.verbose,
+            color=not self.no_color,
+            project=None if flag == "." else flag,
+        )
 
     @property
     def base(self) -> Path:
+        """The folder given with -C, or the current folder."""
         return self.project if self.project is not None else Path.cwd()
+
+    def find_root(self) -> Path | None:
+        """The project: the folder given with -C, or else the nearest folder
+        with a spadework.toml, here or above. None if there is none."""
+        from spadework.project import find_project
+
+        if self.project is not None:
+            return self.project
+        return find_project(Path.cwd())
+
+    def root(self) -> Path:
+        """``find_root``, which must be a project."""
+        root = self.find_root()
+        if root is None:
+            raise InvalidError(
+                f"there is no {CONFIG_FILE} in this folder or any folder above it",
+                "Run `spadework init` to create a project, or pass -C PROJECT_FOLDER.",
+            )
+        if not (root / CONFIG_FILE).is_file():
+            raise InvalidError(
+                f"there is no {CONFIG_FILE} in {root}",
+                "Run `spadework init` to create a project, or pass -C PROJECT_FOLDER.",
+            )
+        return root
 
 
 def _options(
@@ -121,14 +178,23 @@ def _options(
 
 
 @contextmanager
-def _reporting(ui: Ui, *, json_output: bool = False) -> Iterator[None]:
-    """Report errors as a message and a hint, with the right exit code."""
+def _reporting(
+    ui: Ui,
+    *,
+    json_output: bool = False,
+    paths: Callable[[], Path | None] | None = None,
+) -> Iterator[None]:
+    """Report errors as a message and a hint, with the right exit code.
+
+    ``paths`` gives the folder that the paths in errors are relative to, so
+    that they can be shown relative to the current folder instead.
+    """
     try:
         yield
     except typer.Exit:
         raise
     except SpadeworkError as exc:
-        _fail(ui, exc, json_output=json_output)
+        _fail(ui, exc, json_output=json_output, paths=paths)
     except KeyboardInterrupt:
         ui.err.print("interrupted")
         raise typer.Exit(ExitCode.INTERRUPTED) from None
@@ -140,21 +206,88 @@ def _reporting(ui: Ui, *, json_output: bool = False) -> Iterator[None]:
         _fail(ui, _run_error(exc), json_output=json_output)
 
 
-def _fail(ui: Ui, exc: SpadeworkError, *, json_output: bool) -> NoReturn:
+def _fail(
+    ui: Ui,
+    exc: SpadeworkError,
+    *,
+    json_output: bool,
+    paths: Callable[[], Path | None] | None = None,
+) -> NoReturn:
+    """Report ``exc`` and exit. Paths in JSON stay relative to the project, as
+    every path in spadework's JSON is; on stderr they are shown relative to
+    the current folder."""
     if json_output:
         from spadework.views import error_document
 
         ui.json(error_document(exc))
+    _relocate(exc, paths)
     ui.error(exc)
     raise typer.Exit(exc.exit_code) from None
 
 
-def _shown(path: Path) -> str:
-    """A path as the user would type it: relative when it is below them."""
-    here, target = Path.cwd().resolve(), path.resolve()
-    if here != Path(here.anchor) and target.is_relative_to(here):
-        return os.path.relpath(target, here)
-    return target.as_posix()
+def _relocate(exc: SpadeworkError, paths: Callable[[], Path | None] | None) -> None:
+    """Make the paths of ``exc``'s problems relative to the current folder."""
+    if paths is None or not exc.problems:
+        return
+    try:
+        base = paths()
+    except OSError:
+        return
+    if base is None:
+        return
+    for problem in exc.problems:
+        # The message often starts with the file too: "brief.md is not valid".
+        path = problem.path
+        if path is not None and exc.message.startswith(f"{path} "):
+            exc.message = f"{_from_here(base, path)}{exc.message[len(path) :]}"
+            break
+    exc.problems = tuple(
+        replace(problem, path=_from_here(base, problem.path))
+        for problem in exc.problems
+    )
+
+
+def _from_here(base: Path, path: str | None) -> str | None:
+    """``path``, relative to ``base``, as seen from the current folder."""
+    if path is None or path.startswith(("/", "[")):
+        return path
+    prefix = shown(base)
+    return path if prefix == "." else posixpath.normpath(f"{prefix}/{path}")
+
+
+def _here(root: Path, path: str) -> str:
+    """A path in the project, as seen from the current folder."""
+    return _from_here(root, path) or path
+
+
+def _located(root: Path | None, warning: Any) -> str:
+    """A project warning's message, after the file and line it is about: as
+    seen from the current folder, or with no ``root``, from the project."""
+    from spadework.errors import Problem
+
+    path = warning.path if root is None else _from_here(root, warning.path)
+    return str(Problem(warning.message, path, warning.line))
+
+
+def _ignored_inputs(ui: Ui, root: Path) -> None:
+    """Warn about the files in inputs/ that are not read, for the commands
+    that do not print every project warning as check does."""
+    from spadework.inputs import INPUTS_DIR, ignored_inputs, ignored_inputs_warning
+
+    warning = ignored_inputs_warning(ignored_inputs(root / INPUTS_DIR))
+    if warning is not None:
+        ui.warning(*warning)
+
+
+def _no_arguments(ctx: typer.Context, command: str) -> None:
+    """A command that takes no arguments was given one: maybe a project."""
+    if not ctx.args:
+        return
+    argument = ctx.args[0]
+    hint = f"See `spadework {command} --help`."
+    if Path(argument).is_dir():
+        hint = f"Did you mean `spadework {command} -C {shlex.quote(argument)}`?"
+    raise UsageError(f"{command} takes no arguments, but was given {argument!r}", hint)
 
 
 def _print_version(value: bool) -> None:
@@ -215,7 +348,7 @@ def init(
             "--force",
             help=(
                 "Allow a folder that is not empty. Replaces its spadework.toml and "
-                "brief.md."
+                "brief.md, and keeps the old ones as .bak files."
             ),
         ),
     ] = False,
@@ -231,36 +364,43 @@ def init(
     DIR must be empty or new, unless you pass --force.
     """
     options = _options(ctx, project, quiet, verbose, no_color)
-    ui = options.ui()
-    with _reporting(ui):
+    # -C is where DIR is, not a project, and init never looks for one.
+    ui = options.ui(for_project=False)
+    with _reporting(ui, paths=lambda: options.base):
         from spadework.scaffold import init_project
 
         base = options.base
         target = base / directory if directory is not None else base
-        shown = _shown(target)
-        result = init_project(target, playbook, force=force, cwd=base, shown=shown)
+        where = shown(target)
+        result = init_project(target, playbook, force=force, cwd=base, shown=where)
 
         if result.replaced:
-            ui.warning(f"replaced the existing {' and '.join(result.replaced)}")
+            message = f"replaced the existing {' and '.join(result.replaced)}"
+            backups = list(result.backups.values())
+            if backups:
+                kept = "one is" if len(backups) == 1 else "ones are"
+                message += f"; the old {kept} kept as {' and '.join(backups)}"
+            ui.warning(message)
         if not options.quiet:
-            ui.result(f"Created a {result.playbook.name} project in {shown}:")
+            ui.result(f"Created a {result.playbook.name} project in {where}:")
             for name in [*result.written, *result.replaced]:
                 ui.result(f"  {name}")
         check = (
             "spadework check"
-            if shown == "."
-            else f"spadework check -C {shlex.quote(shown)}"
+            if where == "."
+            else f"spadework check -C {shlex.quote(where)}"
         )
-        brief = "brief.md" if shown == "." else f"{shown}/brief.md"
+        brief = "brief.md" if where == "." else f"{where}/brief.md"
         ui.info(f"Next: edit {brief}, then run `{check}`.")
 
 
 @app.command(
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework check",
         "spadework check -C acme-fabrication --show-public",
         "spadework check --json | jq '.tasks[] | {id, estimate_usd}'",
-    )
+    ),
 )
 def check(
     ctx: typer.Context,
@@ -291,29 +431,38 @@ def check(
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
-    with _reporting(ui, json_output=json_output):
+    with _reporting(ui, json_output=json_output, paths=options.find_root):
+        _no_arguments(ctx, "check")
         from spadework import views
         from spadework.engine.planning import plan_project
         from spadework.project import load_project
         from spadework.render import public_view
 
-        loaded = load_project(options.base)
+        root = options.root()
+        loaded = load_project(root)
         plan = plan_project(loaded).plan
         if options.verbose:
             ui.info(f"playbook: {loaded.playbook.ref.display_root}")
             ui.info(f"inputs: {len(loaded.inputs)} files")
 
-        warnings: list[tuple[str, str | None]] = [
-            (warning.message, warning.hint) for warning in loaded.warnings
+        warnings: list[tuple[str, str | None, str]] = [
+            (
+                _located(None, warning),
+                warning.hint,
+                _located(root, warning),
+            )
+            for warning in loaded.warnings
         ]
-        warnings += views.plan_warnings(plan)
-        for message, hint in warnings:
-            ui.warning(message, hint)
+        warnings += [
+            (message, hint, message) for message, hint in views.plan_warnings(plan)
+        ]
+        for _, hint, shown_message in warnings:
+            ui.warning(shown_message, hint)
 
         public = public_view(loaded.brief, loaded.playbook) if show_public else None
         if json_output:
             documents = [
-                {"message": message, "hint": hint} for message, hint in warnings
+                {"message": message, "hint": hint} for message, hint, _ in warnings
             ]
             ui.json(views.check_document(loaded, plan, documents, public))
         elif public is not None:
@@ -328,11 +477,16 @@ def check(
 
 @app.command(
     "run",
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework run",
         "spadework run --only stack --force",
         "spadework run --budget-usd 3 --max-time 90m --no-review",
         "spadework run --json | jq -c 'select(.event == \"task_finished\")'",
+        note=(
+            "To try a run without spending anything, set SPADEWORK_EXECUTOR=fake: "
+            "no model is called, and placeholder documents are written."
+        ),
     ),
 )
 def run_command(
@@ -449,7 +603,8 @@ def run_command(
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
-    with _reporting(ui):
+    with _reporting(ui, paths=options.find_root):
+        _no_arguments(ctx, "run")
         from spadework.engine.display import LinesDisplay, LiveDisplay, NdjsonDisplay
         from spadework.engine.run import RunOptions, run_project
         from spadework.views import error_document
@@ -475,7 +630,9 @@ def run_command(
         else:
             display = LinesDisplay(ui)
         try:
-            result = run_project(options.base, settings, reporter=display)
+            root = options.root()
+            _ignored_inputs(ui, root)
+            result = run_project(root, settings, reporter=display)
         except BaseException as exc:
             # The run did not start. With --json this is the last event; the
             # human-readable error follows on stderr, from _reporting.
@@ -508,7 +665,7 @@ def _run_error(exc: BaseException) -> SpadeworkError:
         error.exit_code = ExitCode.INTERRUPTED
         return error
     if isinstance(exc, OSError):
-        where = _shown(Path(exc.filename)) if exc.filename else "a file"
+        where = shown(Path(exc.filename)) if exc.filename else "a file"
         return SpadeworkError(
             f"cannot use {where}: {exc.strerror or exc}",
             "Check that the path exists and that you may read and write it.",
@@ -520,10 +677,11 @@ def _run_error(exc: BaseException) -> SpadeworkError:
 
 
 @app.command(
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework status",
         "spadework status -C acme-fabrication --json | jq .last_run",
-    )
+    ),
 )
 def status(
     ctx: typer.Context,
@@ -544,13 +702,17 @@ def status(
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
-    with _reporting(ui, json_output=json_output):
+    with _reporting(ui, json_output=json_output, paths=options.find_root):
+        _no_arguments(ctx, "status")
         from spadework import views
         from spadework.engine.status import project_status
         from spadework.project import load_project
 
-        loaded = load_project(options.base)
+        loaded = load_project(options.root())
         current = project_status(loaded)
+        ignored = loaded.ignored_inputs_warning()
+        if ignored is not None:
+            ui.warning(ignored.message, ignored.hint)
         for warning in current.warnings:
             ui.warning(warning)
         if json_output:
@@ -560,10 +722,11 @@ def status(
 
 
 @app.command(
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework verify",
         "spadework verify -C acme-fabrication --json | jq .counts",
-    )
+    ),
 )
 def verify(
     ctx: typer.Context,
@@ -587,11 +750,14 @@ def verify(
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
-    with _reporting(ui, json_output=json_output):
+    with _reporting(ui, json_output=json_output, paths=options.find_root):
+        _no_arguments(ctx, "verify")
         from spadework import views
         from spadework.engine.reverify import verify_pack
 
-        report = verify_pack(options.base, progress=None if json_output else ui.info)
+        root = options.root()
+        _ignored_inputs(ui, root)
+        report = verify_pack(root, progress=None if json_output else ui.info)
         if json_output:
             for message, hint in report.warnings:
                 ui.warning(message, hint)
@@ -600,8 +766,21 @@ def verify(
             views.print_verify(ui, report)
 
 
+@playbooks_app.callback()
+def playbooks(
+    ctx: typer.Context,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """List or show the built-in and local playbooks."""
+    ctx.meta[_OPTIONS] = _options(ctx, project, quiet, verbose, no_color)
+
+
 @playbooks_app.command(
     "list",
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework playbooks list", "spadework -C acme-fabrication playbooks list"
     ),
@@ -621,7 +800,8 @@ def list_playbooks(
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
     with _reporting(ui):
-        from spadework.config import CONFIG_FILE, load_config
+        _no_arguments(ctx, "playbooks list")
+        from spadework.config import load_config
         from spadework.playbook import (
             Playbook,
             builtin_names,
@@ -632,7 +812,8 @@ def list_playbooks(
 
         playbooks: list[Playbook] = []
         specs = builtin_names()
-        config_path = options.base / CONFIG_FILE
+        root = options.find_root() or options.base
+        config_path = root / CONFIG_FILE
         if config_path.is_file():
             try:
                 spec = load_config(config_path).project.playbook
@@ -643,7 +824,7 @@ def list_playbooks(
                     specs.append(spec)
         for spec in specs:
             try:
-                playbooks.append(load_playbook(resolve_playbook(spec, options.base)))
+                playbooks.append(load_playbook(resolve_playbook(spec, root)))
             except SpadeworkError as exc:
                 ui.warning(
                     f"playbook {spec!r} is not valid: {exc.lines()[0]}", exc.hint
@@ -657,6 +838,7 @@ def list_playbooks(
 
 @playbooks_app.command(
     "show",
+    cls=_PlainUsage,
     epilog=_examples(
         "spadework playbooks show discovery-website",
         "spadework playbooks show ./playbooks/mine",
@@ -677,11 +859,14 @@ def show_playbook(
     verbose: VerboseOption = False,
     no_color: NoColorOption = False,
 ) -> None:
-    """Show a playbook: what it needs from the brief, and its tasks in order."""
+    """Show a playbook: what it needs from the brief, and its tasks in order.
+
+    It also shows the playbook's folder, so that you can copy a built-in
+    one to start your own.
+    """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
-    with _reporting(ui):
-        from spadework.errors import InvalidError
+    with _reporting(ui, paths=lambda: options.base):
         from spadework.playbook import load_playbook, resolve_playbook
         from spadework.views import print_playbook
 
@@ -698,6 +883,7 @@ def show_playbook(
         "spadework logs",
         "spadework logs references",
         "spadework logs --follow",
+        "spadework logs --list",
         "spadework logs --run 20260927T210411Z-3f9a --raw | jq -c .type",
     )
 )
@@ -727,6 +913,10 @@ def logs(
     raw: Annotated[
         bool, typer.Option("--raw", help="Print the raw JSONL event logs.")
     ] = False,
+    list_runs: Annotated[
+        bool,
+        typer.Option("--list", help="List the runs, newest first, and their outcomes."),
+    ] = False,
     project: ProjectOption = None,
     quiet: QuietOption = False,
     verbose: VerboseOption = False,
@@ -734,25 +924,174 @@ def logs(
 ) -> None:
     """Show session traces.
 
-    By default it shows every session of the last run: one line per tool
-    call with its target, the calls the sandbox denied, snippets of the
-    model's text, and how each session ended. --follow keeps printing while
-    a run goes on, and stops when it ends.
+    By default it shows every session of the last run that has any: one
+    line per tool call with its target, the calls the sandbox denied,
+    snippets of the model's text, and how each session ended. With TASK, it
+    shows that task's sessions from the last run that has some. --follow
+    keeps printing while a run goes on, and stops when it ends.
     """
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
     with _reporting(ui):
-        from spadework.logs import show_logs
+        from spadework import logs as session_logs
 
-        show_logs(ui, options.base, task=task, run_id=run_id, follow=follow, raw=raw)
+        root = options.root()
+        if list_runs:
+            if task is not None or run_id is not None or follow or raw:
+                raise UsageError(
+                    "--list cannot be used with TASK, --run, --follow or --raw",
+                    "List the runs with `spadework logs --list`, then show one "
+                    "with --run ID.",
+                )
+            session_logs.list_runs(ui, root)
+            return
+        session_logs.show_logs(
+            ui, root, task=task, run_id=run_id, follow=follow, raw=raw
+        )
+
+
+def _can_ask() -> bool:
+    """Whether a question can be put to the user and answered."""
+    return sys.stdin.isatty() and sys.stderr.isatty()
 
 
 @app.command(
+    context_settings=_EXTRA_ARGS,
+    epilog=_examples(
+        "spadework clean --runs",
+        "spadework clean --cache -C acme-fabrication",
+        "spadework clean --all --yes",
+    ),
+)
+def clean(
+    ctx: typer.Context,
+    runs: Annotated[
+        bool,
+        typer.Option("--runs", help="Remove every run's manifest and session logs."),
+    ] = False,
+    cache: Annotated[
+        bool,
+        typer.Option(
+            "--cache",
+            help="Remove the research records, so that the next run researches again.",
+        ),
+    ] = False,
+    everything: Annotated[
+        bool, typer.Option("--all", help="Remove all of .spadework/.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Do not ask first. Needed without a terminal.")
+    ] = False,
+    project: ProjectOption = None,
+    quiet: QuietOption = False,
+    verbose: VerboseOption = False,
+    no_color: NoColorOption = False,
+) -> None:
+    """Remove engine state from .spadework/.
+
+    Give one of --runs, --cache and --all. It never touches spadework.toml,
+    brief.md, inputs/ or out/. It says what it will remove and asks first;
+    without a terminal to ask in, it needs --yes. Exits 7 when a run holds
+    the project.
+    """
+    options = _options(ctx, project, quiet, verbose, no_color)
+    ui = options.ui()
+    with _reporting(ui):
+        _no_arguments(ctx, "clean")
+        from spadework import clean as cleaning
+        from spadework.lock import LOCK_FILE, ProjectLock
+
+        chosen = [
+            name
+            for name, given in (("runs", runs), ("cache", cache), ("all", everything))
+            if given
+        ]
+        if len(chosen) != 1:
+            flags = " and ".join(f"--{name}" for name in chosen)
+            raise UsageError(
+                "choose what to remove: --runs, --cache or --all"
+                if not chosen
+                else f"choose one of {flags}, not both"
+                if len(chosen) == 2
+                else "choose one of --runs, --cache and --all, not all three",
+                "--runs removes the run logs, --cache the research records, and "
+                "--all every file in .spadework/.",
+            )
+        what: cleaning.What = "all" if everything else "runs" if runs else "cache"
+        root = options.root()
+        state = root / cleaning.STATE_DIR
+        if not (state.exists() or state.is_symlink()):
+            ui.info(
+                f"Nothing to remove: there is no {_here(root, cleaning.STATE_DIR)}/."
+            )
+            return
+        with ProjectLock(state / LOCK_FILE) as lock:
+            if lock.warning:
+                ui.warning(lock.warning)
+            plan = cleaning.plan_clean(root, what)
+            if plan.empty:
+                nothing = {
+                    "runs": "there are no runs",
+                    "cache": "there are no research records",
+                    "all": f"there is no {_here(root, cleaning.STATE_DIR)}/",
+                }[what]
+                ui.info(f"Nothing to remove: {nothing}.")
+                return
+            description = _clean_description(plan)
+            for target in plan.targets if what == "cache" else ():
+                ui.info(f"  {_here(root, target.relative)}")
+            if what == "all" and _has_files(root / "out"):
+                ui.warning(
+                    f"the next run will have no record of the files in "
+                    f"{_here(root, 'out')}/, so it will leave them as they are",
+                    "Delete out/ as well if you want the next run to write the pack "
+                    "afresh.",
+                )
+            if not yes:
+                if not _can_ask():
+                    raise UsageError(
+                        f"not removing {description} without --yes",
+                        "Pass --yes to remove it, or run clean in a terminal to be "
+                        "asked first.",
+                    )
+                if not typer.confirm(f"Remove {description}?", err=True):
+                    ui.info("Nothing was removed.")
+                    return
+            cleaning.clean(plan, lock)
+        ui.result(f"removed {description}")
+        if what == "cache":
+            ui.info("The next run researches these tasks again.")
+
+
+def _clean_description(plan: CleanPlan) -> str:
+    """What ``clean`` removes, in a few words with its size."""
+    from spadework.clean import STATE_DIR, human_size
+
+    size = human_size(plan.size)
+    if plan.what == "cache":
+        records = _here(plan.root, f"{STATE_DIR}/records")
+        return f"{plan.detail} from {records}/ ({size})"
+    if plan.what == "runs":
+        runs = _here(plan.root, f"{STATE_DIR}/runs")
+        return f"{runs}/ ({plan.detail}, {size})"
+    state = _here(plan.root, STATE_DIR)
+    return f"{state}/ (all engine state, with {plan.detail}; {size})"
+
+
+def _has_files(folder: Path) -> bool:
+    try:
+        return folder.is_dir() and any(folder.iterdir())
+    except OSError:
+        return False
+
+
+@app.command(
+    context_settings=_EXTRA_ARGS,
     epilog=_examples(
         "spadework doctor",
         "spadework doctor -C acme-fabrication",
         "spadework doctor --canary",
-    )
+    ),
 )
 def doctor(
     ctx: typer.Context,
@@ -783,11 +1122,12 @@ def doctor(
     options = _options(ctx, project, quiet, verbose, no_color)
     ui = options.ui()
     with _reporting(ui, json_output=json_output):
+        _no_arguments(ctx, "doctor")
         from spadework.doctor import run_doctor
 
         ok = run_doctor(
             ui,
-            options.base,
+            options.find_root(),
             explicit_project=options.project is not None,
             canary=canary,
             json_output=json_output,

@@ -6,7 +6,8 @@ import json
 import os
 import shutil
 import socket
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,23 @@ def fake_log(
     return path
 
 
+@pytest.fixture(autouse=True)
+def beside_the_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run from the folder that holds the project, so that -C names it as
+    acme-fabrication in the commands that messages suggest."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def utc(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Local time is UTC, so that dates in messages are known."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     root = tmp_path / "acme-fabrication"
@@ -212,14 +230,49 @@ def test_filters_by_task(cli: Invoke, one_run: Path) -> None:
     assert "001 scope" not in result.stdout
 
 
-def test_an_unknown_task_is_a_usage_error(cli: Invoke, one_run: Path) -> None:
+def test_an_unknown_task_is_a_usage_error(
+    cli: Invoke, one_run: Path, utc: None
+) -> None:
     result = cli("logs", "pricing", "-C", one_run)
+    in_a_run = cli("logs", "pricing", "--run", RUN_1, "-C", one_run)
 
     assert result.exit_code == 2
     assert result.stderr == (
-        f"error: run {RUN_1} has no sessions for 'pricing'\n"
-        "Its sessions are for: audience, scope.\n"
+        "error: no run has sessions for 'pricing'\n"
+        "Sessions so far are for: audience, scope. "
+        f"Recent runs: {RUN_1} (complete, 2026-09-27 21:04).\n"
     )
+    assert in_a_run.exit_code == 2
+    assert in_a_run.stderr == (
+        f"error: run {RUN_1} has no sessions for 'pricing'\n"
+        "Its sessions are for: audience, scope. "
+        f"Recent runs: {RUN_1} (complete, 2026-09-27 21:04).\n"
+    )
+
+
+def test_a_task_shows_the_last_run_that_has_its_sessions(
+    cli: Invoke, one_run: Path
+) -> None:
+    write_run(one_run, RUN_2, [entry(1, "scope", "draft")])
+    claude_log(
+        one_run,
+        RUN_2,
+        "sessions/001-scope-draft.jsonl",
+        "write-ok-with-denial.mock.jsonl",
+    )
+
+    audience = cli("logs", "audience", "-C", one_run)
+    scope = cli("logs", "scope", "-C", one_run)
+
+    assert audience.exit_code == 0
+    assert audience.stdout.startswith(f"run {RUN_1} ")
+    assert "002 audience" in audience.stdout
+    assert audience.stderr == (
+        f"Run {RUN_2} (complete) ended before any session of 'audience'; "
+        f"showing run {RUN_1}.\n"
+    )
+    assert scope.stdout.startswith(f"run {RUN_2} ")
+    assert scope.stderr == ""
 
 
 def test_critic_and_summary_are_named_by_their_kind(cli: Invoke, project: Path) -> None:
@@ -243,7 +296,7 @@ def test_critic_and_summary_are_named_by_their_kind(cli: Invoke, project: Path) 
 
 
 def test_picks_a_run_by_id_or_by_a_unique_prefix(cli: Invoke, one_run: Path) -> None:
-    write_run(one_run, RUN_2, [])
+    write_run(one_run, RUN_2, [entry(1, "scope", "draft")])
 
     assert cli("logs", "-C", one_run).stdout.startswith(f"run {RUN_2} ")
     assert cli("logs", "--run", RUN_1, "-C", one_run).stdout.startswith(f"run {RUN_1} ")
@@ -252,8 +305,8 @@ def test_picks_a_run_by_id_or_by_a_unique_prefix(cli: Invoke, one_run: Path) -> 
     )
 
 
-def test_an_unknown_run_is_a_usage_error(cli: Invoke, one_run: Path) -> None:
-    write_run(one_run, RUN_2, [])
+def test_an_unknown_run_is_a_usage_error(cli: Invoke, one_run: Path, utc: None) -> None:
+    write_run(one_run, RUN_2, [], outcome=None)
 
     unknown = cli("logs", "--run", "20250101T000000Z-0000", "-C", one_run)
     ambiguous = cli("logs", "--run", "2026", "-C", one_run)
@@ -261,11 +314,75 @@ def test_an_unknown_run_is_a_usage_error(cli: Invoke, one_run: Path) -> None:
     assert unknown.exit_code == 2
     assert unknown.stderr == (
         "error: there is no run called '20250101T000000Z-0000'\n"
-        f"The most recent runs are: {RUN_2}, {RUN_1}. "
-        "Leave out --run for the last one.\n"
+        f"Recent runs: {RUN_2} (did not finish, 2026-09-27 21:04), "
+        f"{RUN_1} (complete, 2026-09-27 21:04).\n"
     )
     assert ambiguous.exit_code == 2
     assert "there is more than one run called '2026'" in ambiguous.stderr
+
+
+def test_a_run_that_ended_before_any_session_does_not_hide_the_one_before(
+    cli: Invoke, one_run: Path
+) -> None:
+    write_run(one_run, RUN_2, [], outcome="error")
+
+    result = cli("logs", "-C", one_run)
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith(f"run {RUN_1} ")
+    assert result.stderr == (
+        f"Run {RUN_2} (error) ended before any session; showing run {RUN_1}.\n"
+    )
+
+
+def test_more_than_three_runs_point_at_the_list(
+    cli: Invoke, project: Path, utc: None
+) -> None:
+    for minute in range(4):
+        write_run(project, f"20260927T21{minute:02d}00Z-000{minute}", [])
+
+    result = cli("logs", "--run", "nope", "-C", project)
+
+    assert result.stderr.endswith(
+        "20260927T210100Z-0001 (complete, 2026-09-27 21:04). "
+        "`spadework logs -C acme-fabrication --list` lists them all.\n"
+    )
+
+
+def test_list_shows_every_run_newest_first(
+    cli: Invoke, one_run: Path, utc: None
+) -> None:
+    write_run(one_run, RUN_2, [], outcome=None)
+    (one_run / ".spadework" / "runs" / "20260929T100000Z-aaaa").mkdir()
+
+    result = cli("logs", "--list", "-C", one_run)
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == [
+        "run                    outcome         spent  sessions  started",
+        "20260929T100000Z-aaaa  no manifest         —  —         2026-09-29 10:00",
+        "20260928T090000Z-0b1c  did not finish  $0.00  0         2026-09-27 21:04",
+        "20260927T210411Z-3f9a  complete        $0.29  2         2026-09-27 21:04",
+    ]
+    assert result.stderr == (
+        "Show one with: spadework logs -C acme-fabrication --run ID\n"
+    )
+
+
+def test_list_without_runs(cli: Invoke, project: Path) -> None:
+    result = cli("logs", "--list", "-C", project)
+
+    assert (result.exit_code, result.stdout) == (0, "")
+    assert result.stderr.startswith("no runs yet\n")
+
+
+def test_list_takes_nothing_else(cli: Invoke, one_run: Path) -> None:
+    result = cli("logs", "scope", "--list", "-C", one_run)
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith(
+        "error: --list cannot be used with TASK, --run, --follow or --raw\n"
+    )
 
 
 def test_a_run_with_no_sessions_says_so(cli: Invoke, project: Path) -> None:
@@ -278,13 +395,27 @@ def test_a_run_with_no_sessions_says_so(cli: Invoke, project: Path) -> None:
     assert result.stderr == f"Run {RUN_1} has no sessions yet.\n"
 
 
-def test_a_project_with_no_runs(cli: Invoke, project: Path) -> None:
-    result = cli("logs", "-C", project)
+@pytest.mark.parametrize(
+    "args", [[], ["scope"], ["--follow"], ["scope", "--follow"]], ids=str
+)
+def test_a_project_with_no_runs(cli: Invoke, project: Path, args: list[str]) -> None:
+    result = cli("logs", *args, "-C", project)
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0
+    assert result.stdout == ""
     assert result.stderr == (
-        "error: this project has no runs yet\n"
-        "Start one with `spadework run`. `spadework check` shows what it will do.\n"
+        "no runs yet\n"
+        "Start one with `spadework run -C acme-fabrication`. "
+        "`spadework check -C acme-fabrication` shows what it will do.\n"
+    )
+
+
+def test_a_named_run_in_a_project_with_no_runs(cli: Invoke, project: Path) -> None:
+    result = cli("logs", "--run", RUN_1, "-C", project)
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        f"error: there is no run called '{RUN_1}'\nThis project has no runs yet.\n"
     )
 
 
@@ -306,7 +437,7 @@ def test_a_missing_log_is_a_warning(cli: Invoke, one_run: Path) -> None:
     assert result.stderr == (
         "warning: the log of session 001 scope · draft · sonnet is missing "
         "(sessions/001-scope-draft.jsonl)\n"
-        "It may have been removed by `spadework clean`.\n"
+        "It was moved or deleted.\n"
     )
     assert "002 audience" in result.stdout
 
@@ -403,7 +534,8 @@ def test_a_running_session_is_marked_as_such(cli: Invoke, project: Path) -> None
     assert result.stdout.startswith(f"run {RUN_1} · running · ")
     assert result.stdout.endswith("  Glob      *.md\n  still running\n")
     assert result.stderr == (
-        "The run is still going. Follow it with: spadework logs --follow\n"
+        "The run is still going. Follow it with: "
+        "spadework logs -C acme-fabrication --follow\n"
     )
 
 
@@ -560,7 +692,8 @@ def test_follow_on_a_run_that_died(cli: Invoke, project: Path) -> None:
     assert result.stderr == (
         f"warning: run {RUN_1} had stopped without finishing, and no run is "
         "going now\n"
-        "It may have been killed. `spadework run` picks up where it stopped.\n"
+        "It may have been killed. `spadework run -C acme-fabrication` picks up "
+        "where it stopped.\n"
     )
 
 

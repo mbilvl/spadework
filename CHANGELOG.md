@@ -5,39 +5,42 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-03
+
+The first release.
+
 ### Added
 
-- The design documentation: the v0 specification, architecture decision
-  records 0001–0007, and the roadmap.
-- The Apache-2.0 license, a contributing guide, a code of conduct, and a
-  security policy.
-- The `spadework` command, with `init`, `check` (including `--json` and
-  `--show-public`), `playbooks list` and `playbooks show`, and the global
-  options `-C`, `-q`, `-v` and `--no-color`.
-- The built-in `quickstart` and `discovery-website` playbooks, and a
-  fictional example project in `examples/acme-fabrication/`.
-- JSON Schemas for `spadework.toml`, the brief's front matter,
-  `playbook.toml` and task front matter, shipped in the package.
-- `spadework run`: research and draft each stale task as its own sandboxed
-  Claude Code session, validate the output, repair it once if needed, and
-  render the documents into `out/`. Runs are bounded by money and time,
-  resumable after an interrupt or a crash, and redo only the tasks whose
-  inputs changed. Live view on a terminal, plain lines otherwise, NDJSON
-  with `--json`.
-- `spadework status`, `spadework logs` and `spadework doctor`, including
-  `doctor --canary`, a live check that the sandbox holds on your machine.
-- The sandbox: a per-session guard that allows only the tools each kind of
-  session needs, confines reads to the session's staged files, allows
-  exactly one written file, keeps web-facing sessions away from anything
-  but `public_context`, and fails closed.
-- The `fake` executor (`SPADEWORK_EXECUTOR=fake`) for trying the CLI and for
-  tests, without calling a model.
-- The review loop: a critic session reviews the whole pack each round, fix
-  sessions address its findings (or say why not), and validator failures
-  become findings too. Then a summary session writes `00-summary.md`, with
-  code-written tables for document states, source verification and costs.
-- The rendered pack: a Sources section in every document, `sources.md`, and
+- `spadework init`, `check`, `run`, `status`, `logs`, `verify`, `clean`,
+  `doctor` and `playbooks`. `run` researches and drafts each stale task as
+  its own sandboxed Claude Code session, validates every document in code,
+  repairs it once if needed, reviews the whole pack with a critic and fix
+  sessions, writes a summary, and renders the pack into `out/`: one
+  document per task with its sources, `00-summary.md`, `sources.md` and
   `pack.json`.
+- Runs are bounded by money, time and tool calls, resume after an interrupt
+  or a crash without redoing finished work, and redo only the tasks whose
+  inputs changed, reusing web research. Documents you edit in `out/` are
+  never overwritten silently.
+- The sandbox: every session runs in a staging folder with only the files
+  it needs, under a guard that allows only the tools its kind of session
+  needs, at most one written file, and no shell, code or MCP tools, and
+  that fails closed. Web-facing research sessions see only the brief's
+  `public_context`. `doctor --canary` checks live that the sandbox holds on
+  your machine.
 - Source verification: each source's quote is checked against the live
   page, with strict protection against requests to private networks, and
-  shown as a badge. `spadework verify` checks the sources again.
+  shown as a badge in the pack.
+- The built-in `quickstart` and `discovery-website` playbooks, and a
+  fictional example project in `examples/acme-fabrication/`. Playbooks are
+  data (TOML, Markdown and sandboxed Jinja2), so you can write and share
+  your own; see the guide.
+- The `fake` executor (`SPADEWORK_EXECUTOR=fake`), to try every command
+  without calling a model.
+- JSON output for `check`, `status`, `verify` and `doctor`, NDJSON events
+  for `run`, and JSON Schemas for the project files.
+- Documentation: the specification, architecture decision records, the
+  roadmap, and guides for getting started and writing a playbook.
+
+[Unreleased]: https://github.com/mbilvl/spadework/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mbilvl/spadework/releases/tag/v0.1.0

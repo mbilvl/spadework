@@ -29,6 +29,8 @@ class InitResult:
     playbook: Playbook
     written: list[str] = field(default_factory=list)
     replaced: list[str] = field(default_factory=list)
+    backups: dict[str, str] = field(default_factory=dict)
+    """The name each replaced file was kept under, if it differed."""
 
 
 def project_name(directory: Path) -> str:
@@ -90,8 +92,9 @@ def _check_target(target: Path, shown: str, *, force: bool) -> None:
         if clutter:
             raise UsageError(
                 f"{shown} is not empty",
-                "Choose a new or empty folder, or pass --force to add a project here "
-                f"(it replaces any {CONFIG_FILE} and {BRIEF_FILE}).",
+                "Create the project in a new folder with `spadework init NAME`, or "
+                "pass --force to add it here; any "
+                f"{CONFIG_FILE} and {BRIEF_FILE} it replaces are kept as .bak files.",
             )
     for name, is_right_kind, kind in [
         (INPUTS_DIR, Path.is_dir, "a folder"),
@@ -114,12 +117,27 @@ def _relative_to_project(playbook_root: Path, project_root: Path) -> str:
 
 
 def _write(root: Path, name: str, text: str, result: InitResult) -> None:
+    """Write ``name``. A file it replaces is kept as ``name.bak`` (or
+    ``name.1.bak``, and so on), unless it already held ``text``."""
     path = root / name
     if path.exists():
         result.replaced.append(name)
+        if path.read_bytes() != text.encode("utf-8"):
+            backup = _backup_name(root, name)
+            os.replace(path, root / backup)
+            result.backups[name] = backup
     else:
         result.written.append(name)
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _backup_name(root: Path, name: str) -> str:
+    backup = f"{name}.bak"
+    number = 0
+    while (root / backup).exists() or (root / backup).is_symlink():
+        number += 1
+        backup = f"{name}.{number}.bak"
+    return backup
 
 
 def _add_ignore_line(path: Path, result: InitResult) -> None:

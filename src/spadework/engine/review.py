@@ -75,6 +75,7 @@ from spadework.engine.store import (
     critic_record_name,
     draft_record_name,
     read_critic,
+    read_draft,
     read_research,
     read_summary,
     read_work,
@@ -83,7 +84,7 @@ from spadework.engine.store import (
     write_work,
 )
 from spadework.errors import SpadeworkError
-from spadework.executors.base import SessionKind
+from spadework.executors.base import SessionKind, is_simulated
 from spadework.inputs import INPUTS_DIR, InputFile, match_inputs, scan_inputs
 from spadework.keys import hash_bytes
 from spadework.manifest import RunManifest, load_manifest
@@ -96,7 +97,13 @@ from spadework.records import (
     Record,
     SummaryResult,
 )
-from spadework.render import ResearchFindings, StagedFile
+from spadework.render import (
+    DependencyFacts,
+    ResearchFindings,
+    StagedFile,
+    render_task_body,
+    task_context,
+)
 from spadework.render import Source as SourceView
 from spadework.state import (
     PendingWrite,
@@ -108,6 +115,7 @@ from spadework.state import (
 from spadework.validators import (
     ValidatorResult,
     can_repair,
+    failure_summary,
     failures,
     run_validators,
 )
@@ -382,10 +390,11 @@ class Review:
             files.append(Staged(dest, source=Path(os.path.realpath(file.path))))
             staged.append(StagedFile(dest, file.heading))
         research = self._research(task)
-        if research is not None:
-            view = _findings_view(research)
+        view = None if research is None else _findings_view(research)
+        if view is not None:
             files.append(Staged(RESEARCH_SOURCES, text=sources_file(view)))
             staged.append(StagedFile(RESEARCH_SOURCES, None))
+        body = self._task_body(task, staged, view)
         validators = task.validators
         research_sources = () if research is None else research.result.sources
 
@@ -400,7 +409,11 @@ class Review:
             kind=SessionKind.FIX,
             task=task.id,
             prompt=fix_prompt(
-                task, findings, files=staged, has_research=task.research is not None
+                task,
+                findings,
+                files=staged,
+                has_research=task.research is not None,
+                body=body,
             ),
             system_append=writer_system_prompt("fix", self.project.playbook, brief),
             model=self._model(task),
@@ -414,6 +427,44 @@ class Review:
             findings={finding.id: finding.instruction for finding in findings},
             keep_s=MIN_SESSION_S,
         )
+
+    def _task_body(
+        self,
+        task: Task,
+        staged: Sequence[StagedFile],
+        research: ResearchFindings | None,
+    ) -> str | None:
+        """The task body, rendered as for its draft: the instructions a fix
+        must stay consistent with. None, with a notice, if it fails."""
+        deps = []
+        for dep_id in task.depends_on:
+            dep = self.project.playbook.task(dep_id)
+            # A person's edits may contradict the engine's key facts.
+            record = None if dep_id in self.pinned else read_draft(self.root, dep_id)
+            facts = () if record is None else tuple(record.result.key_facts)
+            deps.append(DependencyFacts(dep, facts))
+        try:
+            return render_task_body(
+                self.project.playbook,
+                task,
+                task_context(
+                    project_name=self.project.config.project.name,
+                    brief=self.project.brief,
+                    task=task,
+                    files=staged,
+                    deps=deps,
+                    research=research,
+                ),
+            )
+        except Exception as exc:
+            self.report(
+                ev.Notice(
+                    f"{task.id}: the task template failed ({exc}); the fix is not "
+                    "given the task's instructions",
+                    task=task.id,
+                )
+            )
+            return None
 
     def _fix(self, task: Task, request: SessionRequest) -> None:
         outcome = self.sessions.run(request)
@@ -541,8 +592,7 @@ class Review:
                 update={"writing": None, "changed": progress.changed or changed}
             )
         )
-        failed = [r.name for r in pending.validators if not r.ok]
-        reason = f"validators failed: {', '.join(failed)}" if failed else None
+        reason = failure_summary(pending.validators)
         self.report(
             ev.TaskFinished(
                 pending.task, entry.status, reason, tuple(pending.validators)
@@ -582,6 +632,40 @@ class Review:
     # The summary.
 
     def _summary(self) -> None:
+        result, error = self._summary_session()
+        if error is not None:
+            self.report(
+                ev.Notice(
+                    f"the summary failed: {error}",
+                    "The pack is rendered without it; the next `spadework run` "
+                    "writes it again.",
+                )
+            )
+        self.summary_error = error
+        self._save_summary(result, error=error)
+        self._set(self._progress().model_copy(update={"summarised": True}))
+
+    def summary_after_stop(self, *, session: bool) -> None:
+        """The summary of a run that stopped before it finished.
+
+        With ``session``, the summary session runs on its reserve. Without
+        it, or if it does not finish, ``00-summary.md`` has only what code
+        writes, with a note. Either way the summary stays owed: the next run
+        that finishes writes it again.
+        """
+        progress = self.state.review
+        if progress is not None and progress.summarised:
+            return  # this review's summary is written already
+        result = None
+        if session:
+            try:
+                result, _ = self._summary_session()
+            except RunStopped as stop:
+                self._notice(f"the summary did not run: {stop.message}")
+        self._save_summary(result, error=None, pending=True)
+
+    def _summary_session(self) -> tuple[SummaryResult | None, str | None]:
+        """Run the summary session: its result, or why it failed."""
         playbook = self.project.playbook
         brief = self.project.brief
         documents = self._documents()
@@ -602,40 +686,38 @@ class Review:
                 use_reserve=True,
             )
         )
-        result: SummaryResult | None = None
-        error = None
         if isinstance(outcome.record, SummaryResult) and outcome.content is not None:
             write_work(self.root, SUMMARY_FILE, outcome.content)
-            result = outcome.record
-        else:
-            error = outcome.error or "the summary session failed"
-            self.report(
-                ev.Notice(
-                    f"the summary failed: {error}",
-                    "The pack is rendered without it; the next `spadework run` "
-                    "writes it again.",
-                )
-            )
-        self.summary_error = error
+            return outcome.record, None
+        return None, outcome.error or "the summary session failed"
+
+    def _save_summary(
+        self,
+        result: SummaryResult | None,
+        *,
+        error: str | None,
+        pending: bool = False,
+    ) -> None:
+        progress = self.state.review
         write_record(
             self.root,
             SUMMARY_RECORD,
             SummaryRecord(
                 run_id=self.run_id,
-                review=self._progress().run_id,
+                review=None if progress is None else progress.run_id,
                 result=result,
                 error=error,
-                pinned_findings=self._progress().pinned_findings,
+                pending=pending,
+                pinned_findings=[] if progress is None else progress.pinned_findings,
                 produced=self._produced(),
             ),
         )
-        self._set(self._progress().model_copy(update={"summarised": True}))
 
     def _adopt_summary(self) -> bool:
         """Whether this review's summary was saved by a run that stopped
         before it noted so; if it was, it is not written again."""
         record = read_summary(self.root)
-        if record is None or record.review != self._progress().run_id:
+        if record is None or record.pending or record.review != self._progress().run_id:
             return False
         if record.result is not None and summary_prose(self.root) is None:
             return False
@@ -665,6 +747,7 @@ class Review:
             cost_usd=round(total, 6),
             runs=runs,
             run_cost_usd=self.manifest.totals.cost_usd,
+            simulated=is_simulated(executor.name),
         )
 
     # What the critic and the summary are given.

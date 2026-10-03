@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from spadework.errors import ExitCode, InvalidError
-from spadework.project import load_project
+from spadework.project import find_project, load_project
 from tests.conftest import BRIEF, MakeProject
 
 
@@ -63,7 +63,12 @@ def test_warns_when_research_has_no_public_context(make_project: MakeProject) ->
 
 
 def test_no_public_context_warning_without_research(make_project: MakeProject) -> None:
-    root = make_project(brief=BRIEF.replace("public_context: ", "unused: "))
+    brief = BRIEF.replace(
+        'public_context: "A stainless-steel fabricator planning a catalogue '
+        'website."\n',
+        "",
+    )
+    root = make_project(brief=brief)
     tasks = root / "playbooks" / "valid" / "tasks"
     (tasks / "landscape.md").unlink()
     (tasks / "plan.md").unlink()
@@ -94,4 +99,44 @@ def test_the_project_cannot_be_inside_its_playbook(
     ]
     assert caught.value.hint == (
         "Keep the playbook in a folder of its own, such as ./playbooks/mine."
+    )
+
+
+def test_find_project_looks_here_then_in_each_folder_above(tmp_path: Path) -> None:
+    root = tmp_path / "acme"
+    (root / "out" / "deep").mkdir(parents=True)
+    (root / "spadework.toml").write_text("schema_version = 1\n")
+
+    assert find_project(root) == root
+    assert find_project(root / "out" / "deep") == root
+    assert find_project(tmp_path) is None
+
+
+def test_find_project_takes_the_nearest(tmp_path: Path) -> None:
+    (tmp_path / "spadework.toml").write_text("")
+    inner = tmp_path / "clients" / "acme"
+    inner.mkdir(parents=True)
+    (inner / "spadework.toml").write_text("")
+
+    assert find_project(inner) == inner
+    assert find_project(tmp_path / "clients") == tmp_path
+
+
+def test_warns_about_brief_keys_nothing_reads(make_project: MakeProject) -> None:
+    brief = BRIEF.replace("priorities:", "priorites: [x]\npriorities:")
+
+    (warning,) = load_project(make_project(brief=brief)).warnings
+
+    assert (warning.path, warning.line) == ("brief.md", 5)
+    assert warning.message == "unknown key 'priorites' (did you mean 'priorities'?)"
+
+
+def test_warns_about_inputs_it_ignores(make_project: MakeProject) -> None:
+    project = load_project(make_project(inputs={"a.md": "# A", "scan.pdf": b"%PDF"}))
+
+    assert project.ignored_inputs == ("inputs/scan.pdf",)
+    (warning,) = project.warnings
+    assert warning == project.ignored_inputs_warning()
+    assert warning.message == (
+        "inputs/scan.pdf is ignored: only .md and .txt inputs are read"
     )

@@ -24,6 +24,7 @@ COMMANDS = {
     "spadework-verify": ["verify"],
     "spadework-logs": ["logs"],
     "spadework-doctor": ["doctor"],
+    "spadework-clean": ["clean"],
     "spadework-playbooks": ["playbooks"],
     "spadework-playbooks-list": ["playbooks", "list"],
     "spadework-playbooks-show": ["playbooks", "show"],
@@ -57,7 +58,5 @@ def test_help_ends_with_examples(cli: Invoke, name: str) -> None:
 def test_global_options_are_in_every_help(cli: Invoke, name: str) -> None:
     text = cli(*COMMANDS[name], "--help").stdout
 
-    if name == "spadework-playbooks":
-        return
     for option in ("-C, --project PATH", "-q, --quiet", "-v, --verbose", "--no-color"):
         assert option in text

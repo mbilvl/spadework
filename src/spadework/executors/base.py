@@ -26,6 +26,16 @@ class SessionKind(StrEnum):
     SUMMARY = "summary"
 
 
+SIMULATED_EXECUTORS = frozenset({"fake"})
+"""Executors that call no model: their costs are simulated, nothing is spent."""
+
+
+def is_simulated(executor: str) -> bool:
+    """Whether the executor named ``executor`` only simulates its costs, so
+    every cost shown for it must say so."""
+    return executor in SIMULATED_EXECUTORS
+
+
 MIN_BUDGET_USD = 0.0001
 """The smallest session cap: the CLI's budget is given to four decimals."""
 

@@ -591,14 +591,25 @@ def test_the_budget_stops_the_run_and_it_resumes(runner: Runner) -> None:
     manifest = ran.manifest
     assert manifest.outcome == "budget"
     assert manifest.exit_code == ExitCode.LIMIT
-    assert manifest.totals.cost_usd == pytest.approx(1.2)
+    assert manifest.totals.cost_usd == pytest.approx(1.8)  # with the summary
     assert ran.finished.message is not None
     assert "cannot cover the next session: landscape draft" in ran.finished.message
-    assert ran.finished.rendered == ()
+    # The pack still gets what was finished, and a summary on its reserve.
+    assert ran.executor.kinds() == ["overview:draft", "landscape:research", "summary"]
+    assert manifest.sessions[-1].cost_usd == pytest.approx(0.6)
+    assert ran.finished.rendered == (
+        "out/00-summary.md",
+        "out/01-overview.md",
+        "out/pack.json",
+        "out/sources.md",
+    )
+    assert "## Executive summary" in (runner.root / "out" / "00-summary.md").read_text()
+    assert ran.state.review is not None  # the review and summary are still owed
 
     resumed = runner()
 
     assert resumed.executor.drafting() == ["landscape:draft", "plan:draft"]
+    assert resumed.executor.reviewing()[-1] == "summary"
     assert resumed.code == 0
 
 
@@ -1460,3 +1471,108 @@ def test_a_task_without_research_may_cite_no_sources(
     assert failure.message is not None
     assert "this task has no sources" in failure.message
     assert ran.tasks() == {"alpha": "invalid"}
+
+
+def test_an_invalid_tasks_reason_gives_the_specifics(
+    make_project: MakeProject, research_tmp: Path
+) -> None:
+    root = make_project()
+    write_playbook(
+        root,
+        {
+            "alpha": task_file(
+                "01-alpha.md",
+                extra="validate:\n  max_lines: 3\n  forbidden_phrases: [placeholder]",
+            )
+        },
+    )
+
+    ran = Runner(root, research_tmp)(review=False)
+
+    reason = (
+        "validators failed: max_lines (15 > 3 lines), forbidden_phrases ('placeholder')"
+    )
+    assert ran.of(ev.TaskFinished)[-1].reason == reason
+    [alpha] = plan_project(load_project(root)).plan.tasks
+    assert (alpha.state, alpha.reason) == ("invalid", reason)
+
+
+def test_research_a_run_would_reuse_is_not_in_the_estimate(runner: Runner) -> None:
+    runner()
+    brief = runner.root / "brief.md"
+    brief.write_text(brief.read_text() + "\nMore about the client.\n")
+
+    planned = plan_project(load_project(runner.root))
+    refreshed = plan_project(load_project(runner.root), refresh_research=True)
+
+    landscape = next(t for t in planned.plan.tasks if t.id == "landscape")
+    assert (landscape.state, landscape.research_reused) == ("stale", True)
+    assert landscape.estimate_usd == 0.5  # its draft only
+    again = next(t for t in refreshed.plan.tasks if t.id == "landscape")
+    assert (again.research_reused, again.estimate_usd) == (False, 1.25)
+    # Without the record, the research runs again, so it is estimated.
+    (runner.root / ".spadework" / "records" / "landscape.research.json").unlink()
+    gone = plan_project(load_project(runner.root))
+    assert next(t for t in gone.plan.tasks if t.id == "landscape").estimate_usd == 1.25
+
+
+def test_too_short_a_max_time_says_a_session_cannot_start(runner: Runner) -> None:
+    ran = runner(max_time="30s")
+
+    assert ran.code == ExitCode.LIMIT
+    assert ran.result.outcome == "time"
+    assert ran.executor.sessions == []
+    assert ran.finished.message == (
+        "there is not enough time left to start a session (30s of 30s left; a "
+        "session needs 1m plus a 30s margin)"
+    )
+    assert ran.finished.hint is not None
+    assert ran.finished.hint.endswith(
+        "Pass a longer --max-time: each session needs at least 1m30s of it."
+    )
+    assert "reached its time limit" not in ran.finished.message
+
+
+def test_the_manifest_keeps_each_documents_one_line_summary(runner: Runner) -> None:
+    ran = runner()
+
+    summaries = {
+        (s.task, s.kind): s.summary for s in ran.manifest.sessions if s.round < 2
+    }
+    assert summaries == {
+        ("overview", "draft"): "Placeholder overview from the fake executor.",
+        ("landscape", "research"): None,
+        ("landscape", "draft"): "Placeholder landscape from the fake executor.",
+        ("plan", "draft"): "Placeholder plan from the fake executor.",
+        (None, "critic"): None,
+        ("overview", "fix"): "Placeholder overview from the fake executor.",
+        (None, "summary"): None,
+    }
+
+
+def test_a_missing_research_record_makes_only_its_task_stale(runner: Runner) -> None:
+    runner()
+    record = runner.root / ".spadework" / "records" / "landscape.research.json"
+    record.unlink()
+
+    planned = plan_project(load_project(runner.root))
+
+    states = {t.id: (t.state, t.reason) for t in planned.plan.tasks}
+    assert states == {
+        "overview": ("fresh", None),
+        "landscape": ("stale", "research record missing"),
+        "plan": ("fresh", None),
+    }
+    ran = runner()
+    assert ran.executor.drafting() == ["landscape:research", "landscape:draft"]
+    assert record.is_file()
+
+
+def test_an_edited_document_stays_pinned_without_its_research(runner: Runner) -> None:
+    runner()
+    (runner.root / "out" / "02-landscape.md").write_text("# Landscape\n\nMine.\n")
+    (runner.root / ".spadework" / "records" / "landscape.research.json").unlink()
+
+    planned = plan_project(load_project(runner.root))
+
+    assert {t.id: t.state for t in planned.plan.tasks}["landscape"] == "pinned"

@@ -28,7 +28,7 @@ from spadework.keys import TaskMaterial, hash_file, stale_reasons
 from spadework.models import SCHEMA_VERSION, SchemaVersion, StrictModel
 from spadework.plan import TaskState, TaskStatus
 from spadework.records import DraftResult
-from spadework.validators import ValidatorResult
+from spadework.validators import ValidatorResult, failure_summary
 
 STATE_DIR = ".spadework"
 STATE_FILE = "state.json"
@@ -497,13 +497,7 @@ def _derive(
     if entry.status == "failed":
         return DerivedStatus.of("failed", [entry.error or "the last attempt failed"])
     if entry.status == "invalid":
-        names = [result.name for result in entry.validators if not result.ok]
         return DerivedStatus.of(
-            "invalid",
-            [
-                f"validators failed: {', '.join(names)}"
-                if names
-                else "validators failed"
-            ],
+            "invalid", [failure_summary(entry.validators) or "validators failed"]
         )
     return DerivedStatus.of("fresh")

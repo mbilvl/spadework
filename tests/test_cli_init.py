@@ -149,8 +149,9 @@ def test_refuses_a_folder_that_is_not_empty(
     assert result.exit_code == 2
     assert result.stderr == (
         "error: demo is not empty\n"
-        "Choose a new or empty folder, or pass --force to add a project here (it "
-        "replaces any spadework.toml and brief.md).\n"
+        "Create the project in a new folder with `spadework init NAME`, or pass "
+        "--force to add it here; any spadework.toml and brief.md it replaces are "
+        "kept as .bak files.\n"
     )
     assert sorted(p.name for p in (workdir / "demo").iterdir()) == ["notes.md"]
 
@@ -195,11 +196,40 @@ def test_force_replaces_config_and_brief_and_keeps_the_rest(
         "  .gitignore (added .spadework/)\n  spadework.toml\n  brief.md\n"
     )
     assert result.stderr.startswith(
-        "warning: replaced the existing spadework.toml and brief.md\n"
+        "warning: replaced the existing spadework.toml and brief.md; the old ones "
+        "are kept as spadework.toml.bak and brief.md.bak\n"
     )
     assert (root / "inputs" / "call.md").read_text() == "# Call"
     assert (root / "brief.md").read_text().startswith("---\n# REQUIRED")
+    assert (root / "brief.md.bak").read_text() == "old"
+    assert (root / "spadework.toml.bak").read_text() == "old"
     assert (root / ".gitignore").read_text() == "node_modules/\n.spadework/\n"
+
+
+def test_force_numbers_backups_and_skips_unchanged_files(
+    cli: Invoke, builtins: Path, workdir: Path
+) -> None:
+    root = workdir / "demo"
+    root.mkdir()
+    (root / "brief.md").write_text("first")
+    (root / "brief.md.bak").write_text("older")
+    template = (builtins / "quickstart" / "brief.template.md").read_text()
+
+    assert cli("init", "demo", "--force", "--playbook", "quickstart").exit_code == 0
+    (root / "brief.md").write_text("second")
+    result = cli("init", "demo", "--force", "--playbook", "quickstart")
+    again = cli("init", "demo", "--force", "--playbook", "quickstart")
+
+    assert (root / "brief.md.bak").read_text() == "older"
+    assert (root / "brief.md.1.bak").read_text() == "first"
+    assert (root / "brief.md.2.bak").read_text() == "second"
+    assert (root / "brief.md").read_text() == template
+    assert "the old one is kept as brief.md.2.bak" in result.stderr
+    # Nothing is lost when the files hold what init writes, so no backup.
+    assert again.stderr.startswith(
+        "warning: replaced the existing spadework.toml and brief.md\n"
+    )
+    assert not (root / "brief.md.3.bak").exists()
 
 
 def test_force_leaves_a_gitignore_that_already_ignores_state(

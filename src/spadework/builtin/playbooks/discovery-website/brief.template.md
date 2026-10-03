@@ -17,9 +17,15 @@ reader: "A developer scoping and quoting a new website for a client"
 #   the kind of website planned, and the languages the site will be in.
 #   Leave out: names, budgets, internal figures, contacts, and anything you
 #   would not post publicly.
-# It may stay "", but then research has nothing to work from.
+# Write it as a short paragraph on the lines below "public_context: >",
+# indented by two spaces, for example:
+#   public_context: >
+#     A 25-person stainless-steel fabricator in northern Portugal that sells
+#     to commercial kitchens across the EU, planning a catalogue website in
+#     Portuguese and English.
+# It may stay empty, but then research has nothing to work from.
 # See exactly what research will see with: spadework check --show-public
-public_context: ""
+public_context: >
 
 # REQUIRED by this playbook. What matters most for this website, most
 # important first; three to five short lines. The review checks every

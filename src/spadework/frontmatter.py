@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -66,19 +67,24 @@ def parse_front_matter(text: str, display: str, hint: str) -> FrontMatter:
     # YAML marks are 0-based and relative to yaml_text, which starts on line 2.
     first_line = 2
 
-    def fail(message: str, line: int | None) -> InvalidError:
+    def fail(message: str, line: int | None, why: str | None = None) -> InvalidError:
         return InvalidError(
             f"{display} has invalid front matter",
-            hint,
+            why or hint,
             problems=[Problem(message, display, line)],
+        )
+
+    def invalid(exc: yaml.MarkedYAMLError) -> InvalidError:
+        return fail(
+            f"invalid YAML: {_yaml_problem(exc)}",
+            _line(exc, first_line),
+            yaml_hint(exc, yaml_text.splitlines(), first_line),
         )
 
     try:
         node = yaml.compose(yaml_text, Loader=yaml.SafeLoader)
     except yaml.MarkedYAMLError as exc:
-        raise fail(
-            f"invalid YAML: {_yaml_problem(exc)}", _line(exc, first_line)
-        ) from exc
+        raise invalid(exc) from exc
 
     key_lines: KeyLines = {}
     if node is not None:
@@ -92,9 +98,7 @@ def parse_front_matter(text: str, display: str, hint: str) -> FrontMatter:
     try:
         data = yaml.safe_load(yaml_text)
     except yaml.MarkedYAMLError as exc:
-        raise fail(
-            f"invalid YAML: {_yaml_problem(exc)}", _line(exc, first_line)
-        ) from exc
+        raise invalid(exc) from exc
     if data is None:
         data = {}
     for key in data:
@@ -117,6 +121,94 @@ def _line(exc: yaml.MarkedYAMLError, first_line: int) -> int | None:
 def _yaml_problem(exc: yaml.MarkedYAMLError) -> str:
     parts = [exc.context, exc.problem]
     return ", ".join(part for part in parts if part) or "cannot parse"
+
+
+# A line that holds a key and a value, or a list item.
+_KEY_VALUE = re.compile(r"^\s*(?P<key>[^\s'\"#:-][^:#]*?):\s+(?P<value>.+?)\s*$")
+_ITEM = re.compile(r"^\s*-\s+(?P<value>.+?)\s*$")
+_CANNOT_START = re.compile(r"found character '.' that cannot start any token")
+
+
+def yaml_hint(
+    exc: yaml.MarkedYAMLError, lines: list[str], first_line: int
+) -> str | None:
+    """A hint for the YAML mistakes people make most, or None.
+
+    ``lines`` are the front matter's lines; ``first_line`` is the file line
+    of the first of them.
+    """
+    problem = exc.problem or ""
+    context = exc.context or ""
+    mark = exc.problem_mark
+    text = lines[mark.line] if mark is not None and mark.line < len(lines) else ""
+    if "'\\t'" in problem:
+        return "YAML does not allow tabs: indent with spaces."
+    if context.startswith("while scanning a quoted scalar"):
+        start = exc.context_mark
+        where = "" if start is None else f" on line {start.line + first_line}"
+        return f"A quoted value is not closed: close the quote that opens{where}."
+    if context.startswith("while scanning a block scalar"):
+        return "After > or |, start the text on the next line, indented by two spaces."
+    if problem == "could not find expected ':'":
+        return (
+            "Each line needs a key and a colon. To go on with a value on more lines, "
+            "indent them under its key."
+        )
+    if "expected <block end>, but found '<scalar>'" in problem:
+        return (
+            "Text follows a closing quote: put the whole value inside the quotes, "
+            'and write a quote inside it as \\".'
+        )
+    if "expected <block end>, but found '<block" in problem:
+        return "Check the indentation: the items of a list must line up."
+    if "expected <block end>, but found ']'" in problem or problem.endswith("'}'"):
+        return (
+            "A ] or } has no opening bracket: remove it, or put the value in double "
+            "quotes if the bracket is part of the text."
+        )
+    if problem.startswith(("found unknown escape character", "expected escape")):
+        return (
+            "Inside double quotes a backslash starts an escape: write \\\\ for a "
+            "backslash, or use single quotes."
+        )
+    if context.startswith("while parsing a flow"):
+        return (
+            "A [ or { is not closed: close it, or put the value in double quotes if "
+            "the bracket is part of the text."
+        )
+    parts = _value(text)
+    if parts is not None:
+        lead, value = parts
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        quoted = f'Put the value in double quotes: {lead}"{escaped}"'
+        if problem == "mapping values are not allowed here" and ": " in value:
+            return quoted
+        if (
+            problem.startswith("sequence entries are not allowed")
+            or context.startswith("while scanning an alias")
+            or _CANNOT_START.search(problem)
+        ):
+            return quoted
+    if problem == "mapping values are not allowed here":
+        return (
+            "Check the indentation of this line: keys of the front matter start at "
+            "the beginning of a line."
+        )
+    return None
+
+
+def _value(line: str) -> tuple[str, str] | None:
+    """The start of ``line`` up to its value, and its value, if it has an
+    unquoted one: ``("title: ", "x")``, or ``("- ", "x")`` for a list item."""
+    if (match := _KEY_VALUE.match(line)) is not None:
+        lead, value = f"{match['key']}: ", match["value"]
+    elif (item := _ITEM.match(line)) is not None:
+        lead, value = "- ", item["value"]
+    else:
+        return None
+    if value[0] in "'\"" or value in (">", "|"):
+        return None
+    return lead, value
 
 
 def _index_nodes(

@@ -1,8 +1,8 @@
 # Contributing to spadework
 
-Thanks for your interest in spadework. The project is in its design phase,
-and the [roadmap](docs/roadmap.md) shows what is being built next. Feedback
-on the [specification](docs/spec/00-overview.md) is as welcome as code.
+Thanks for your interest in spadework. Version 0.1 is the first release,
+and the [roadmap](docs/roadmap.md) shows what comes next. Feedback on the
+[specification](docs/spec/00-overview.md) is as welcome as code.
 
 ## Ways to contribute
 
@@ -59,8 +59,9 @@ and 3.14. It also runs every pre-commit hook, and checks that
 - **Tests never call a model.** Use the fake executor: its scripted
   sessions, its recorded `stream-json` fixtures, and its injectable
   failures. CI never spends money on model calls.
-- **Security tests stay green.** Every security invariant has a test in
-  `tests/security/` ([07 — Security](docs/spec/07-security.md)). If you find
+- **Security tests stay green.** Every security invariant has tests, most of
+  them in `tests/security/` ([07 — Security](docs/spec/07-security.md)
+  lists where). If you find
   a way around the guard, report it privately first (see
   [Security](#security)).
 - **Changes to the sandbox or the executor** should also pass the

@@ -355,6 +355,63 @@ class Playbook:
                 return task
         raise KeyError(task_id)
 
+    def brief_extra_keys(self) -> set[str] | None:
+        """The keys its templates read as ``brief.extra.<key>``, or None when a
+        template uses ``brief.extra`` as a whole, as in a loop over it.
+
+        A close reading of the template text, not a render: templates can
+        include any file of the playbook, so every file but the manifest,
+        the brief template and the prompts is read.
+        """
+        texts = [task.source for task in self.tasks]
+        texts += _template_files(self.ref.root)
+        keys: set[str] = set()
+        for text in texts:
+            for match in _EXTRA.finditer(text):
+                key = match["get"] or match["attr"] or match["item"]
+                if key is None or key in _MAPPING_METHODS:
+                    return None
+                keys.add(key)
+            if _WHOLE_BRIEF.search(text):
+                return None
+        return keys
+
+
+# ``brief.extra`` and what follows it: ``.get('key'``, ``.key`` or ``['key']``.
+_EXTRA = re.compile(
+    r"\bbrief\s*\.\s*extra\b"
+    r"(?:\s*\.\s*get\s*\(\s*(?P<q1>['\"])(?P<get>[^'\"]+)(?P=q1)"
+    r"|\s*\.\s*(?P<attr>[A-Za-z_]\w*)"
+    r"|\s*\[\s*(?P<q2>['\"])(?P<item>[^'\"]+)(?P=q2)\s*\])?"
+)
+_MAPPING_METHODS = frozenset({"get", "items", "keys", "values"})
+# The brief's keys reached some other way: brief['extra'], or brief | tojson.
+_WHOLE_BRIEF = re.compile(r"\bbrief\s*(?:\[\s*['\"]extra|\|)")
+
+
+def _template_files(root: Path) -> list[str]:
+    """The text of every file a template could include, other than tasks."""
+    skip = {PLAYBOOK_FILE, BRIEF_TEMPLATE, TASKS_DIR, PROMPTS_DIR}
+    real_root = root.resolve()
+    texts = []
+    for current, folders, names in os.walk(root):
+        top = Path(current) == root
+        folders[:] = [
+            name
+            for name in folders
+            if not name.startswith(".") and not (top and name in skip)
+        ]
+        for name in names:
+            path = Path(current, name)
+            if name.startswith(".") or (top and name in skip) or path.is_symlink():
+                continue
+            try:
+                if path.resolve().is_relative_to(real_root):
+                    texts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+    return texts
+
 
 def builtin_root() -> Path:
     root = importlib.resources.files("spadework") / "builtin" / "playbooks"

@@ -17,6 +17,7 @@ Commands:
   status     Show task states and the last run.
   verify     Check the quote of every source in the pack again.
   logs       Show session traces.
+  clean      Remove engine state from .spadework/.
   doctor     Check the environment spadework runs in.
   playbooks  List or show the built-in and local playbooks.
 

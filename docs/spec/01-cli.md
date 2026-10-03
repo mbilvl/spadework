@@ -16,15 +16,15 @@ shell alias.
 
 | Command | Purpose | Spends money |
 |---|---|---|
-| `spadework init [DIR] [--playbook NAME]` | Create a project from a playbook | no |
+| `spadework init [DIR] [--playbook NAME] [--force]` | Create a project from a playbook | no |
 | `spadework check [--json] [--show-public]` | Validate the project and print the plan. This is the dry run. | no |
 | `spadework run [options]` | Run the pipeline | **yes** |
 | `spadework status [--json]` | Task states, the last run, spend, and whether a run is active | no |
-| `spadework logs [TASK] [--run ID] [--follow] [--raw]` | Show session traces | no |
+| `spadework logs [TASK] [--run ID] [--follow] [--raw] [--list]` | Show session traces | no |
 | `spadework verify [--json]` | Re-verify the sources in the pack | no (network only) |
-| `spadework playbooks list` / `show NAME` | List or show the built-in and local playbooks | no |
+| `spadework playbooks list` / `show NAME` | List or show the built-in and local playbooks; `show` also prints the playbook's folder, to copy a built-in one | no |
 | `spadework doctor [--canary] [--json]` | Check the environment. `--canary` runs a tiny live sandbox test. | `--canary` only (cents) |
-| `spadework clean [--runs \| --cache \| --all] [--yes]` | Remove engine state. Never touches `brief.md` or `inputs/`. | no |
+| `spadework clean [--runs \| --cache \| --all] [--yes]` | Remove engine state. Never touches `spadework.toml`, `brief.md`, `inputs/` or `out/`. | no |
 | `spadework --version` | Print the version | no |
 
 ### `init`
@@ -34,8 +34,9 @@ defaults to `discovery-website` and also accepts a path to a playbook folder,
 which is written to `spadework.toml` relative to the project. `DIR` must be
 new or empty; a folder holding only `.git` counts as empty. A folder that
 isn't empty is a usage error (exit `2`) unless `--force` is given. `--force`
-replaces `spadework.toml` and `brief.md` with a warning and never touches
-`inputs/`. The project contains:
+replaces `spadework.toml` and `brief.md`, keeping each old file as
+`NAME.bak` (`NAME.1.bak`, … if that is taken) unless it is unchanged, and
+never touches `inputs/`. The project contains:
 
 - `spadework.toml`
 - `brief.md`, copied from the playbook's brief template with its required
@@ -57,16 +58,18 @@ budget    $6.00 · 2h · 2 review rounds
   task         state   reason                                  est.
   scope        fresh                                           —
   audience     stale   inputs/2026-09-30-client-call.md added  $0.40
-  references   stale   depends on: audience                    $1.10
+  references   stale   dependency audience is stale            $1.10
   ...
-estimated spend for pending and stale work: up to $3.20 (cap $6.00)
+estimated spend for research and drafting: up to $3.20 (cap $6.00; the review and summary come out of the same budget)
 ```
 
 `est.` is the task's `budget_usd`, plus the research estimate when the task
-has research ([04](04-engine.md#budgets-and-limits)). It is a ceiling, not a
-prediction, so the total can exceed the cap without a problem: a run that
-reaches the cap stops and can be resumed. `check` warns only when a single
-task could never start within the budget.
+has research ([04](04-engine.md#budgets-and-limits)). A task that will reuse
+its stored research is marked *research reused*, and its `est.` leaves the
+research out; `--json` gives `research_reused` per task. Estimates are for
+planning, not caps, so the total can exceed the budget without a problem: a
+run that reaches the budget stops and can be resumed. `check` warns only
+when a single session could never start within the budget.
 
 - `--show-public` prints everything from the project that web-facing
   research sessions will see: `public_context` and each research task's
@@ -82,7 +85,7 @@ task could never start within the budget.
 | Option | Default | Meaning |
 |---|---|---|
 | `--only TASK` (repeatable) | all | Run only these tasks. Dependencies are not rerun, and their existing outputs are used. |
-| `--force` | off | Ignore the cache for the selected tasks. Also regenerates pinned outputs. |
+| `--force` | off | Ignore the cache for the selected tasks. Regenerates a pinned output only together with `--only` (see below). |
 | `--refresh-research` | off | Redo research sessions even when their fingerprint matches |
 | `--no-review` | off | Skip the review rounds |
 | `--rounds N` | config (2) | Maximum number of review rounds |
@@ -129,7 +132,8 @@ With `--json`, `run` prints one JSON object per line on stdout, each with
 
 **Interrupts.** The first Ctrl-C stops the current session (SIGTERM to its
 process group, then SIGKILL after 5 s), writes the manifest, and exits `130`.
-A second Ctrl-C exits immediately.
+A second Ctrl-C skips the 5 s wait and kills the session at once; the run
+still records it and writes the manifest.
 
 ### `verify`
 
@@ -145,12 +149,24 @@ only. It exits `0` whatever the checks find, `3` for an invalid project and
 counts, sources, written, kept, render_owed, warnings}`, where each source
 is `{id, task, url, status, detail, checked_at, final_url}`.
 
+### `clean`
+
+`--runs` removes `.spadework/runs/` (manifests and session logs), `--cache`
+the research records (`.spadework/records/*.research.json`), so the next
+run researches those tasks again, and `--all` the whole of `.spadework/`.
+Give exactly one. It never touches `spadework.toml`, `brief.md`, `inputs/`
+or `out/`. It says what it will remove and its size, holds the project lock
+while removing (exit `7` if a run holds it), asks on a TTY, and needs `--yes`
+otherwise (exit `2`). After `--all`, the next run has no record of the files
+in `out/` and leaves them alone, so `clean` warns and suggests deleting
+`out/` as well.
+
 ### `doctor`
 
-One line per check, marked ✓, ✗ or ! (a warning): Python, spadework, the
-executor and where it was chosen, the executor's own checks (see
-[05](05-executors.md)), and, inside a project or the folder given with `-C`,
-whether `check` passes. It exits `1` when a required check fails.
+One line per check, never wrapped, marked ✓, ✗ or ! (a warning): Python,
+spadework, the executor and where it was chosen, the executor's own checks
+(see [05](05-executors.md)), and, inside a project or the folder given with
+`-C`, whether `check` passes and whether any input files are ignored. It exits `1` when a required check fails.
 
 `--canary` runs one `haiku` session, capped at $0.05 (it can pass the cap by
 one call), staged under the OS temporary directory and removed afterwards.
@@ -163,9 +179,12 @@ other required checks to pass.
 
 ### `logs`
 
-Shows the last run (or `--run ID`, or a unique prefix of it), with every
-session or only those of `TASK` (`critic` and `summary` name the review's
-sessions). Each tool call is one line, with denied calls highlighted, text
+Shows the last run that has sessions (of `TASK`, if given), or `--run ID` (or
+a unique prefix of it), with every session or only those of `TASK` (`critic`
+and `summary` name the review's sessions). A later run that ended before any
+session is noted and passed over. `--list` lists the runs, newest first, with
+outcome, spend, sessions and start time. With no runs it prints `no runs
+yet` and exits `0`. Each tool call is one line, with denied calls highlighted, text
 snippets, and each session's status, cost, duration and denials. Logs are
 replayed through the executor's own parser. `--raw` prints the JSONL as
 recorded. `--follow` returns when the run ends. An unknown run or task exits
@@ -198,7 +217,10 @@ timestamped plain lines, one per event.
 | `-q, --quiet` / `-v, --verbose` | Less or more output. `-v` shows tracebacks. |
 | `--no-color` | Disable colour. The `NO_COLOR` environment variable is also honoured. |
 
-Global options may be given before or after the command name.
+Global options may be given before or after the command name, including
+after `playbooks`. Without `-C`, the project is the first folder holding a
+`spadework.toml`, from the current folder up, the way git finds a
+repository; `init` never looks.
 
 ## Output conventions
 
@@ -212,6 +234,12 @@ Global options may be given before or after the command name.
   human-readable error still goes to stderr.
 - An error is one line that says what happened, followed by one line on what
   to do about it. No tracebacks unless `-v` or `SPADEWORK_DEBUG=1`.
+- Paths in messages are relative to the current folder (absolute outside
+  it); in JSON they are relative to the project. When `-C` names a project
+  other than the current folder, the commands that messages suggest include
+  it. A command that takes no arguments, given a folder, suggests `-C`.
+- Costs from the `fake` executor are labelled *simulated* wherever they are
+  shown.
 - Destructive commands (`clean`) ask for confirmation on a TTY. Without a TTY
   they require `--yes`.
 - When a command has an obvious next step, it suggests it.
@@ -240,7 +268,8 @@ then `spadework.toml`, then built-in defaults. A user-level config file
 |---|---|
 | `SPADEWORK_CLAUDE_BIN` | Path to the `claude` binary |
 | `SPADEWORK_EXECUTOR` | Executor name. `fake` is for tests and demos. |
-| `SPADEWORK_DEBUG` | Show tracebacks |
+| `SPADEWORK_DEBUG` | Show tracebacks, and keep staging directories and control files |
+| `SPADEWORK_FAKE_SCRIPT` | A JSON or TOML script for the `fake` executor ([05](05-executors.md)) |
 | `NO_COLOR` | Disable colour |
 
 ## Help text

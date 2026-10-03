@@ -9,9 +9,8 @@ playbook written by someone else safely. The full format is in
 ## Start from a copy
 
 The quickest way in is to copy a built-in playbook and change it.
-`spadework playbooks show quickstart` shows its tasks. The built-ins live in
-the package under `spadework/builtin/playbooks/`; this repository has them
-in `src/spadework/builtin/playbooks/`.
+`spadework playbooks show quickstart` shows its tasks and the folder it is
+installed in; copy that folder to start your own.
 
 A playbook is a folder:
 
@@ -26,13 +25,20 @@ market-scan/
     └── rules.md
 ```
 
-Point a project at it with a path, relative to the project:
+Point a new project at it with `--playbook` and a path relative to where
+you run the command:
 
 ```bash
 spadework init acme --playbook ./playbooks/market-scan
 ```
 
-or set `playbook = "./playbooks/market-scan"` in `spadework.toml`.
+`init` writes the path into `acme/spadework.toml` relative to the project
+(here `playbook = "../playbooks/market-scan"`). In an existing project, set
+`playbook` in `spadework.toml` yourself, as a path relative to the project.
+
+Copying a playbook copies its `brief.template.md` too: update it to match
+your playbook, including any field you add to `requires_brief`, because
+`init` copies it into each new project's `brief.md`.
 
 ## `playbook.toml`
 
@@ -70,8 +76,11 @@ research:
   max_searches: 4
   max_fetches: 6
   questions: |
-    For {{ (public_context | trim) }}:
-    - the published prices of the closest competitors, with what each tier includes
+    The project, as publicly described:
+    {{ (public_context | trim) or "(No description was given.)" }}
+
+    Find the published prices of the closest competitors, with what each
+    tier includes.
 validate:
   max_lines: 120
   min_sources: 3
@@ -92,7 +101,7 @@ out**, and **Gaps** (what the research could not find).
 | `depends_on` | Tasks whose documents this one builds on. They run first, and their documents and key facts are given to this task. |
 | `tier` | `draft` or `review`; `spadework.toml` maps each to a model. Use `review` where a stronger model clearly pays off. |
 | `inputs` | Globs over `inputs/` (default: all). Only matching inputs are given to the task, and only they make it stale. |
-| `budget_usd` | The task's cost estimate, which also sets its session's spending cap. |
+| `budget_usd` | The estimate for the task's draft session. That session's hard cap is 1.5 × this, or what is left of the run's budget. |
 | `research` | Adds a web research session before the draft. |
 | `validate` | Checks run in code after every draft (see below). |
 
@@ -148,9 +157,14 @@ inherited validator off.
 ## Prompt additions
 
 Files in `prompts/` are appended, as written, to the engine's base prompt of
-the same name: `rules.md` for house style in every document, `critic.md` for
-extra review checks, `summary.md` for the summary. They can add to the base
-prompts but not replace them, and they are not templates.
+the same name: `rules.md` for house style in every document, `research.md`,
+`draft.md`, `repair.md` and `fix.md` for those sessions, `critic.md` for
+extra review checks, and `summary.md` for the summary. They can add to the
+base prompts but not replace them, and they are not templates.
+
+Editing `rules.md`, `draft.md` or `research.md` counts as a change to the
+tasks, like editing a task file: the next run redoes them. The other prompt
+files take effect at the next review or summary.
 
 ## Check it
 

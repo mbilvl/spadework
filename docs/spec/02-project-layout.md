@@ -16,8 +16,8 @@ acme-fabrication/
 └── .spadework/           # engine state                 (engine only; gitignored)
     ├── state.json        # per-task fingerprints, status, output hashes
     ├── work/             # raw task outputs (what fix sessions edit)
-    ├── records/          # <task>.research.json (with verification), <task>.draft.json
-    ├── runs/<run-id>/    # manifest.json, sessions/NNN-<task>-<kind>.jsonl and .denials.jsonl
+    ├── records/          # <task>.research.json, <task>.draft.json, review.round-N.json, summary.json
+    ├── runs/<run-id>/    # manifest.json, sessions/NNN-<task>-<kind>.jsonl (NNN-critic, NNN-summary) and .denials.jsonl
     ├── sessions/         # staging directories (temporary)
     ├── control/          # guard policies and settings for live sessions (temporary)
     └── lock
@@ -87,7 +87,7 @@ public_context: >
 | `priorities` | when the playbook requires it | The critic checks the pack against them |
 | `language` | no (default `en`) | The language the pack is written in |
 | `currencies` | no | Money figures are given in each of these |
-| any other key | no | Available to templates as `brief.extra.<key>` |
+| any other key | no | Available to templates as `brief.extra.<key>`. `check` warns about a key no template uses, and suggests the field it was probably meant to be when it is close to one. |
 
 A playbook can declare more required fields (`requires_brief`). `check`
 reports any that are missing. A field counts as missing when it is absent,
@@ -99,7 +99,9 @@ Material that arrives after the brief: call notes, client answers, emails,
 and links the client sent.
 
 - v0 accepts UTF-8 `.md` and `.txt` files, in subfolders too. Hidden files
-  are ignored. PDF and other document types are **[later]**.
+  are ignored. Other file types are ignored with a warning from every command
+  that loads the project; a `.md` or `.txt` file that isn't UTF-8 is an
+  error. PDF and other document types are **[later]**.
 - The recommended naming is `YYYY-MM-DD-topic.md`, so the history reads in order.
 - Each file is hashed. Adding, editing or removing a file makes the tasks
   whose `inputs` globs match it stale ([04](04-engine.md)).
@@ -144,7 +146,8 @@ Engine-only. The layout above is informational, not a public contract,
 except that:
 
 - `runs/<run-id>/manifest.json` has a versioned schema ([04](04-engine.md)).
-- `clean` is the supported way to remove state.
+- `clean` is the supported way to remove state (`--runs`, `--cache`,
+  `--all`).
 - Session logs contain the brief and inputs. They are local files and are
   never uploaded anywhere by spadework.
 

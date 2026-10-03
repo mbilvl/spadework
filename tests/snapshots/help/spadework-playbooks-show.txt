@@ -1,6 +1,9 @@
-Usage: spadework playbooks show [OPTIONS] {NAME}
+Usage: spadework playbooks show [OPTIONS] NAME
 
   Show a playbook: what it needs from the brief, and its tasks in order.
+
+  It also shows the playbook's folder, so that you can copy a built-in one to
+  start your own.
 
 Arguments:
   NAME  A built-in playbook, or the path to a playbook folder.  [required]

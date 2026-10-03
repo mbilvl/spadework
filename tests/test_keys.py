@@ -125,7 +125,12 @@ def test_draft_key_ignores_the_order_of_inputs_and_dependencies() -> None:
 def test_the_key_is_the_hash_of_the_material() -> None:
     material = draft_material(**DRAFT)
     assert material.key == draft_key(**DRAFT)
-    assert material.key == hash_json(material.model_dump(mode="json"))
+    # Without appendices, ``prompts`` is left out: keys stay as they were.
+    assert material.key == hash_json(
+        material.model_dump(mode="json", exclude={"prompts"})
+    )
+    with_prompts = draft_material(**DRAFT, appendices={"rules": "Be brief."})
+    assert with_prompts.key == hash_json(with_prompts.model_dump(mode="json"))
     task = _task()
     assert task.key == task.draft.key
     assert task.research_key == research_key(**RESEARCH)
@@ -377,3 +382,83 @@ def test_draft_material_is_frozen() -> None:
         material.model = "opus"  # type: ignore[misc]
     assert isinstance(material, DraftMaterial)
     assert isinstance(research_material(**RESEARCH), ResearchMaterial)
+
+
+# The playbook's prompt appendices.
+
+
+def test_without_appendices_keys_are_as_before() -> None:
+    material = draft_material(**DRAFT)
+    research = research_material(**RESEARCH)
+
+    assert material.prompts is None
+    assert research.prompts is None
+    dumped = material.model_dump(mode="json")
+    del dumped["prompts"]
+    assert material.key == hash_json(dumped)
+
+
+@pytest.mark.parametrize("name", ["rules", "draft"])
+def test_rules_and_draft_appendices_change_the_draft_key(name: str) -> None:
+    plain = draft_material(**DRAFT)
+    one = draft_material(**DRAFT, appendices={name: "Prefer tables."})
+    two = draft_material(**DRAFT, appendices={name: "Prefer prose."})
+
+    assert len({plain.key, one.key, two.key}) == 3
+    old = TaskMaterial(draft=plain, research=None)
+    new = TaskMaterial(draft=one, research=None)
+    assert stale_reasons(old, new) == ["playbook prompts changed"]
+
+
+@pytest.mark.parametrize("name", ["critic", "fix", "summary", "repair", "research"])
+def test_other_appendices_leave_the_draft_key(name: str) -> None:
+    assert (
+        draft_material(**DRAFT, appendices={name: "Anything."}).key
+        == draft_material(**DRAFT).key
+    )
+
+
+def test_the_research_appendix_changes_the_research_key() -> None:
+    old = _task()
+    research = research_material(**RESEARCH, appendices={"research": "Aim for 5."})
+    draft = draft_material(**{**DRAFT, "research_key": research.key})
+    new = TaskMaterial(draft=draft, research=research)
+
+    assert old.research_key != new.research_key
+    assert stale_reasons(old, new) == ["playbook prompts changed"]
+    assert (
+        research_material(**RESEARCH, appendices={"rules": "x", "draft": "y"}).key
+        == research_material(**RESEARCH).key
+    )
+
+
+def test_editing_a_playbook_appendix_makes_tasks_stale(
+    make_project: MakeProject,
+) -> None:
+    root = make_project()
+    before = task_materials(load_project(root), engine=ENGINE)
+    rules = root / "playbooks" / "valid" / "prompts" / "rules.md"
+    rules.write_text(rules.read_text() + "Use British English.\n")
+    (root / "playbooks" / "valid" / "prompts" / "critic.md").write_text("Be harsh.\n")
+
+    after = task_materials(load_project(root), engine=ENGINE)
+
+    for task_id in ("overview", "landscape", "plan"):
+        assert before[task_id].key != after[task_id].key
+        assert "playbook prompts changed" in stale_reasons(
+            before[task_id], after[task_id]
+        )
+    # The research is told nothing of the house rules: it is reused.
+    assert before["landscape"].research_key == after["landscape"].research_key
+
+
+def test_a_critic_appendix_alone_changes_no_key(make_project: MakeProject) -> None:
+    root = make_project()
+    before = task_materials(load_project(root), engine=ENGINE)
+    for name in ("critic", "fix", "summary"):
+        path = root / "playbooks" / "valid" / "prompts" / f"{name}.md"
+        path.write_text(f"Extra {name} guidance.\n")
+
+    after = task_materials(load_project(root), engine=ENGINE)
+
+    assert {k: m.key for k, m in before.items()} == {k: m.key for k, m in after.items()}

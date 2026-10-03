@@ -133,17 +133,43 @@ class Run:
                 unlisted.append(session)
         return sorted([*listed, *unlisted], key=lambda session: session.n)
 
+    @property
+    def simulated_label(self) -> str:
+        """The label after a cost, " (simulated)", when the run's executor
+        calls no model."""
+        from spadework.executors.base import is_simulated
+
+        if self.manifest is None or not is_simulated(self.manifest.executor.name):
+            return ""
+        return " (simulated)"
+
+    def outcome_text(self, *, active: bool) -> str:
+        manifest = self.manifest
+        if manifest is None:
+            return "running" if active else "no manifest"
+        return manifest.outcome or ("running" if active else "did not finish")
+
+    def started_text(self) -> str:
+        """When the run started, in local time to the minute."""
+        started = None
+        if self.manifest is not None:
+            started = _time(self.manifest.started_at.replace("Z", "+00:00"))
+        if started is None:
+            started = dt.datetime.strptime(
+                self.run_id.split("-")[0], "%Y%m%dT%H%M%SZ"
+            ).replace(tzinfo=dt.UTC)
+        return started.astimezone().strftime("%Y-%m-%d %H:%M")
+
     def describe(self, *, active: bool) -> str:
         manifest = self.manifest
         if manifest is None:
-            state = "running" if active else "no manifest"
-            return f"run {self.run_id} · {state}"
-        outcome = manifest.outcome or ("running" if active else "did not finish")
+            return f"run {self.run_id} · {self.outcome_text(active=active)}"
+        outcome = self.outcome_text(active=active)
         totals = manifest.totals
         parts = [
             f"run {self.run_id}",
             outcome,
-            f"${totals.cost_usd:.2f}",
+            f"${totals.cost_usd:.2f}{self.simulated_label}",
             _plural(totals.sessions, "session"),
         ]
         if totals.guard_denials:
@@ -195,40 +221,101 @@ def _started(run: Path) -> tuple[str, int, str]:
     return run.name.split("-")[0], written, run.name
 
 
+class NoRuns(Exception):
+    """The project has no runs yet: ``logs`` says so, and exits 0."""
+
+
 def find_run(root: Path, run_id: str | None) -> Run:
     """The run called ``run_id`` (or the only one it is a prefix of), or the
-    last run."""
+    last run. Raises ``NoRuns`` when there is no run at all and none was
+    named."""
+    ids = _project_run_ids(root)
+    if run_id is None:
+        if not ids:
+            raise NoRuns
+        return load_run(root, ids[-1])
+    matches = [name for name in ids if name == run_id] or [
+        name for name in ids if name.startswith(run_id)
+    ]
+    if len(matches) != 1:
+        what = "no run" if not matches else "more than one run"
+        raise UsageError(
+            f"there is {what} called '{run_id}'",
+            recent_runs_hint(root, ids) if ids else "This project has no runs yet.",
+        )
+    return load_run(root, matches[0])
+
+
+def load_run(root: Path, run_id: str) -> Run:
+    run = Run(root, run_id)
+    run.reload()
+    return run
+
+
+def _project_run_ids(root: Path) -> list[str]:
+    """``run_ids``, after checking that ``root`` is a project at all."""
     from spadework.config import CONFIG_FILE
 
     ids = run_ids(root)
-    if not ids:
-        if not (root / CONFIG_FILE).is_file() and not (root / STATE_DIR).is_dir():
-            raise InvalidError(
-                f"there is no {CONFIG_FILE} in {root}",
-                "Run spadework in a project folder, or pass -C PROJECT_FOLDER.",
-            )
-        raise SpadeworkError(
-            "this project has no runs yet",
-            "Start one with `spadework run`. `spadework check` shows what it will do.",
+    if (
+        not ids
+        and not (root / CONFIG_FILE).is_file()
+        and not (root / STATE_DIR).is_dir()
+    ):
+        raise InvalidError(
+            f"there is no {CONFIG_FILE} in {root}",
+            "Run spadework in a project folder, or pass -C PROJECT_FOLDER.",
         )
-    if run_id is None:
-        chosen = ids[-1]
-    else:
-        matches = [name for name in ids if name == run_id] or [
-            name for name in ids if name.startswith(run_id)
-        ]
-        if len(matches) != 1:
-            recent = ", ".join(reversed(ids[-3:]))
-            what = "no run" if not matches else "more than one run"
-            raise UsageError(
-                f"there is {what} called '{run_id}'",
-                f"The most recent runs are: {recent}. "
-                "Leave out --run for the last one.",
-            )
-        chosen = matches[0]
-    run = Run(root, chosen)
-    run.reload()
-    return run
+    return ids
+
+
+def latest_with_sessions(root: Path, task: str | None) -> tuple[Run, Run | None]:
+    """The run ``logs`` shows when no ``--run`` is given, and the later run it
+    passed over, if any.
+
+    That is the last run, unless it ended before any session (or before any
+    of ``task``'s): then the most recent run that has them. A run that is
+    still going is always shown. Raises ``NoRuns`` without runs, and a usage
+    error when ``task`` names no session of any run.
+    """
+    ids = _project_run_ids(root)
+    if not ids:
+        raise NoRuns
+    last = load_run(root, ids[-1])
+    if is_active(last):
+        return last, None
+    for run_id in reversed(ids):
+        run = last if run_id == last.run_id else load_run(root, run_id)
+        sessions = run.sessions()
+        if any(task is None or session.matches(task) for session in sessions):
+            return run, None if run is last else last
+    if task is None:
+        return last, None
+    names = sorted(
+        {
+            session.task or session.kind
+            for run_id in ids
+            for session in load_run(root, run_id).sessions()
+        }
+    )
+    listed = f"Sessions so far are for: {', '.join(names)}. " if names else ""
+    raise UsageError(
+        f"no run has sessions for '{task}'", listed + recent_runs_hint(root, ids)
+    )
+
+
+def recent_runs_hint(root: Path, ids: list[str] | None = None, count: int = 3) -> str:
+    """The last few runs, newest first, for a hint."""
+    ids = run_ids(root) if ids is None else ids
+    recent = []
+    for run_id in reversed(ids[-count:]):
+        run = load_run(root, run_id)
+        recent.append(
+            f"{run_id} ({run.outcome_text(active=is_active(run))}, "
+            f"{run.started_text()})"
+        )
+    more = " `spadework logs --list` lists them all." if len(ids) > count else ""
+    return f"Recent runs: {', '.join(recent)}.{more}"
 
 
 def select(run: Run, task: str | None) -> list[SessionLog]:
@@ -240,7 +327,7 @@ def select(run: Run, task: str | None) -> list[SessionLog]:
         names = sorted({session.task or session.kind for session in sessions})
         raise UsageError(
             f"run {run.run_id} has no sessions for '{task}'",
-            f"Its sessions are for: {', '.join(names)}.",
+            f"Its sessions are for: {', '.join(names)}. " + recent_runs_hint(run.root),
         )
     return chosen
 
@@ -437,7 +524,10 @@ def event_line(event: Event) -> RichText | None:
     return None
 
 
-def summary_lines(summary: Summary | None, *, running: bool) -> list[RichText]:
+def summary_lines(
+    summary: Summary | None, *, running: bool, label: str = ""
+) -> list[RichText]:
+    """How a session ended. ``label`` follows its cost, as " (simulated)"."""
     from rich.text import Text as RichText
 
     if summary is None:
@@ -445,7 +535,7 @@ def summary_lines(summary: Summary | None, *, running: bool) -> list[RichText]:
         return [RichText(f"  {text}", style="dim")]
     parts = [summary.status]
     if summary.cost_usd is not None:
-        parts.append(f"${summary.cost_usd:.2f}")
+        parts.append(f"${summary.cost_usd:.2f}{label}")
     if summary.duration_s is not None:
         parts.append(format_duration(round(summary.duration_s)))
     parts.append(_plural(summary.tool_calls, "tool call"))
@@ -548,7 +638,7 @@ class LogPrinter:
             self.ui.warning(
                 f"the log of session {tail.session.title} is missing "
                 f"({tail.session.log})",
-                "It may have been removed by `spadework clean`.",
+                "It was moved or deleted.",
             )
         tail.done = True
 
@@ -590,12 +680,19 @@ class LogPrinter:
         )
         if entry is not None:
             tail.replay.summary()  # reports denials whose calls never finished
-        for line in summary_lines(summary, running=running):
+        label = self.run.simulated_label
+        for line in summary_lines(summary, running=running, label=label):
             self._print(line)
 
     def _print(self, line: RichText) -> None:
         # One line per event, never re-wrapped, so a trace can be grepped.
         self.ui.out.print(line, soft_wrap=True)
+
+
+NO_RUNS = "no runs yet"
+NO_RUNS_HINT = (
+    "Start one with `spadework run`. `spadework check` shows what it will do."
+)
 
 
 def show_logs(
@@ -610,12 +707,31 @@ def show_logs(
     sleep: Sleep = time.sleep,
 ) -> None:
     """``spadework logs``: print the logs of a run's sessions."""
-    if follow:
-        follow_logs(
-            ui, root, task=task, run_id=run_id, raw=raw, poll_s=poll_s, sleep=sleep
-        )
-        return
-    run = find_run(root, run_id)
+    try:
+        if follow:
+            follow_logs(
+                ui, root, task=task, run_id=run_id, raw=raw, poll_s=poll_s, sleep=sleep
+            )
+        else:
+            _show(ui, root, task=task, run_id=run_id, raw=raw)
+    except NoRuns:
+        ui.info(NO_RUNS)
+        ui.info(NO_RUNS_HINT)
+
+
+def _show(
+    ui: Ui, root: Path, *, task: str | None, run_id: str | None, raw: bool
+) -> None:
+    if run_id is None:
+        run, passed_over = latest_with_sessions(root, task)
+        if passed_over is not None:
+            what = "any session" if task is None else f"any session of '{task}'"
+            ui.info(
+                f"Run {passed_over.run_id} ({passed_over.outcome_text(active=False)}) "
+                f"ended before {what}; showing run {run.run_id}."
+            )
+    else:
+        run = find_run(root, run_id)
     sessions = select(run, task)
     active = is_active(run)
     printer = LogPrinter(ui, run, raw=raw)
@@ -630,10 +746,24 @@ def show_logs(
     if not any(shown):
         raise SpadeworkError(
             "none of the session logs of this run exist",
-            "They may have been removed by `spadework clean`.",
+            f"They were moved or deleted from .spadework/{RUNS_DIR}/{run.run_id}/.",
         )
     if active:
         ui.info("The run is still going. Follow it with: spadework logs --follow")
+
+
+def list_runs(ui: Ui, root: Path) -> None:
+    """``spadework logs --list``: every run, newest first."""
+    from spadework.views import print_runs
+
+    ids = _project_run_ids(root)
+    if not ids:
+        ui.info(NO_RUNS)
+        ui.info(NO_RUNS_HINT)
+        return
+    runs = [load_run(root, run_id) for run_id in reversed(ids)]
+    print_runs(ui, [(run, is_active(run)) for run in runs])
+    ui.info("Show one with: spadework logs --run ID")
 
 
 def follow_logs(
@@ -646,7 +776,8 @@ def follow_logs(
     poll_s: float = POLL_S,
     sleep: Sleep = time.sleep,
 ) -> None:
-    """Print the logs of a run as it goes, until it ends."""
+    """Print the logs of a run as it goes, until it ends. Raises ``NoRuns``
+    when there is no run to follow."""
     run = _wait_for_run(ui, root, run_id, poll_s=poll_s, sleep=sleep)
     printer = LogPrinter(ui, run, raw=raw)
     active = followed = is_active(run)
@@ -697,7 +828,7 @@ def _wait_for_run(
         if run is not None and (is_active(run) or not lock_held(root)):
             return run
         if run is None and not lock_held(root):
-            return find_run(root, None)  # raises: no runs
+            return find_run(root, None)  # raises NoRuns
         if not told:
             ui.info("Waiting for the run to start…")
             told = True

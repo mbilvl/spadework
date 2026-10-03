@@ -89,7 +89,9 @@ def test_quickstart_end_to_end(cli: Invoke, quickstart: Path) -> None:
     assert "  landscape  pending          $1.15" in lines
     # Three drafting sessions, then the critic, a fix, the critic, the summary.
     assert re.fullmatch(
-        r"run \S+ · complete · \$0\.42 of \$6\.00 · 7 sessions · 0m\d\ds", lines[-6]
+        r"run \S+ · complete · \$0\.42 of \$6\.00 \(simulated\) · 7 sessions · "
+        r"0m\d\ds",
+        lines[-6],
     )
     assert lines[-5:] == [
         "  wrote out/00-summary.md",
@@ -104,8 +106,11 @@ def test_quickstart_end_to_end(cli: Invoke, quickstart: Path) -> None:
     assert (quickstart / "out" / "02-questions.md").is_file()
     progress = result.stderr.splitlines()
     assert re.fullmatch(
-        rf"{STAMP} run \S+ started: 2 tasks, budget \$6\.00, max time 2h", progress[0]
+        rf"{STAMP} run \S+ started: 2 tasks, executor fake \(no model is called; "
+        r"costs are simulated\), budget \$6\.00, max time 2h",
+        progress[0],
     )
+    assert any(line.endswith(", simulated)") for line in progress)
     assert re.fullmatch(
         rf"{STAMP} landscape research: started \(sonnet, cap \$1\.12, timeout 25m\)",
         progress[1],
@@ -122,8 +127,10 @@ def test_quickstart_end_to_end(cli: Invoke, quickstart: Path) -> None:
         re.fullmatch(rf"{STAMP} review round 2: the critic's verdict is ship", line)
         for line in progress
     )
+    # The project is not the current folder, so the next command names it.
     assert progress[-1] == (
-        "Next: read the pack in out/. `spadework status` shows each task."
+        "Next: read the pack in out/. "
+        f"`spadework status -C {quickstart.resolve().as_posix()}` shows each task."
     )
 
 
@@ -175,6 +182,7 @@ def test_json_is_ndjson_events(cli: Invoke, quickstart: Path) -> None:
     assert started["executor"] == {
         "name": "fake",
         "version": started["executor"]["version"],
+        "simulated": True,
     }
     session = events[2]
     assert {key: session[key] for key in ("n", "task", "kind", "model", "attempt")} == {
@@ -216,6 +224,7 @@ def test_json_is_ndjson_events(cli: Invoke, quickstart: Path) -> None:
     end = events[-1]
     assert end["outcome"] == "complete"
     assert end["exit_code"] == 0
+    assert end["simulated"] is True
     assert end["sessions"] == 7
     assert end["rendered"] == [
         "out/00-summary.md",
@@ -600,4 +609,40 @@ def test_force_only_replaces_a_persons_edits_end_to_end(
     )
     assert "edited by a person" not in summary
     assert "  landscape  fresh" in cli("status", "-C", quickstart).stdout
+    assert cli("run", "-C", quickstart).stdout.endswith("up to date\n")
+
+
+def test_clean_cache_makes_the_next_run_research_again(
+    cli: Invoke, quickstart: Path
+) -> None:
+    assert cli("run", "-q", "-C", quickstart).exit_code == 0
+    assert cli("clean", "--cache", "--yes", "-C", quickstart).exit_code == 0
+    assert not (
+        quickstart / ".spadework" / "records" / "landscape.research.json"
+    ).exists()
+
+    check = cli("check", "--json", "-C", quickstart)
+
+    tasks = {t["id"]: t for t in json.loads(check.stdout)["tasks"]}
+    assert (tasks["landscape"]["state"], tasks["landscape"]["reason"]) == (
+        "stale",
+        "research record missing",
+    )
+    # Its research is estimated again: there is nothing to reuse.
+    assert tasks["landscape"]["research_reused"] is False
+    assert tasks["landscape"]["estimate_usd"] == 1.15
+    assert tasks["questions"]["state"] == "fresh"
+    text = cli("check", "-C", quickstart).stdout
+    assert re.search(r"\n  landscape +stale +research record missing +\$1\.15\n", text)
+
+    ran = cli("run", "--json", "-C", quickstart)
+
+    assert ran.exit_code == 0
+    sessions = [
+        (e["task"], e["kind"])
+        for e in ndjson(ran.stdout)
+        if e["event"] == "session_started"
+    ]
+    assert sessions[:2] == [("landscape", "research"), ("landscape", "draft")]
+    assert (quickstart / ".spadework" / "records" / "landscape.research.json").is_file()
     assert cli("run", "-C", quickstart).stdout.endswith("up to date\n")

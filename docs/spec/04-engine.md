@@ -36,7 +36,7 @@ flowchart TD
 |---|---|---|---|---|---|
 | `research` | stale task with `research` | Nothing on disk. The prompt holds public context and the questions. | WebSearch, WebFetch | nothing | `ResearchResult` |
 | `draft` | stale task | brief, matching inputs, dependency outputs, research notes and sources | Read, Glob, Grep, Write, Edit | its output | `DraftResult` |
-| `repair` | validators failed | same as draft, plus the failure messages | same as draft | its output | `DraftResult` |
+| `repair` | validators failed | same as the session it repairs (a draft, or a review fix), plus the failure messages | same as draft | its output | `DraftResult` |
 | `critic` | each review round | brief, inputs, all current documents (a person's edited version from `out/`), records digest | Read, Glob, Grep | nothing | `CriticResult` |
 | `fix` | a document has findings | brief, its matching inputs, its output, its findings (in the prompt), its sources with their verification status | Read, Glob, Grep, Write, Edit | its output | `FixResult` |
 | `summary` | end of run, if any output changed | brief, inputs, all documents, records digest | Read, Glob, Grep, Write | `00-summary.md` | `SummaryResult` |
@@ -60,8 +60,8 @@ Both are SHA-256 hashes over canonical JSON.
 
 | Key | Inputs |
 |---|---|
-| research key | engine prompt version, `public_context`, the rendered research questions, the research model |
-| draft key | engine prompt version, the playbook name and version, the task file's content, the brief's content, the content of each matching input file, the draft model, the task's research key, **and the draft keys of its dependencies** |
+| research key | engine prompt version, the playbook's `prompts/research.md`, `public_context`, the rendered research questions, the research model |
+| draft key | engine prompt version, the playbook's `prompts/rules.md` and `prompts/draft.md`, the playbook name and version, the task file's content, the brief's content, the content of each matching input file, the draft model, the task's research key, **and the draft keys of its dependencies** |
 
 Dependencies contribute their *keys*, not their output text. Fixes applied
 during review change output text without changing any key, so review can
@@ -77,7 +77,7 @@ until that dependency is redrafted.
 |---|---|
 | `pending` | Has never run |
 | `fresh` | The key matches the last successful draft |
-| `stale` | The key changed. The reason is recorded: *brief changed*, *inputs/x.md added* (or *changed*, *removed*), *task file changed*, *public context changed*, *research questions changed*, *playbook 0.1.0 → 0.2.0*, *draft model sonnet → opus*, *research model …*, *engine prompts changed*, *dependency ia is stale* (or *changed*), or *--force*. |
+| `stale` | The key changed. The reason is recorded: *brief changed*, *inputs/x.md added* (or *changed*, *removed*), *task file changed*, *public context changed*, *research questions changed*, *playbook 0.1.0 → 0.2.0*, *draft model sonnet → opus*, *research model …*, *engine prompts changed*, *playbook prompts changed*, *research record missing* (after `clean --cache`), *dependency ia is stale* (or *changed*), or *--force*. |
 | `failed` | The last attempt errored. The next run retries it. |
 | `invalid` | An output exists, but validators still fail after repair. It is not redrafted until its key changes or `--force` is used; its validator failures go to the review loop as findings. |
 | `pinned` | A human edited the output ([02](02-project-layout.md#human-edits)) |
@@ -129,7 +129,7 @@ findings for documents a person still has edited. If the session fails,
 `00-summary.md` holds only the
 code-written parts and a note, the outcome is `partial`, and the next run
 writes it again. The session
-writes the prose parts of `00-summary.md`: an executive summary of at most 12
+writes the prose parts of `00-summary.md`. Its prompt asks for an executive summary of at most 12
 bullets, the key decisions with reasons, and at most 10 consolidated open
 questions. The engine appends sections rendered by code, so they are always
 accurate:
@@ -138,6 +138,9 @@ accurate:
 - source verification counts per document and in total, with a flag when a
   research session met *possible prompt injection* (I11)
 - review findings against documents a person edited, when there are any
+- in the documents table, a mark on any document whose session returned
+  `partial`; in the footer, a note when the costs were simulated by the
+  `fake` executor
 - the "How this pack was produced" footer: date, spadework, playbook and
   executor versions, the total cost over the recorded runs and this run's
   share, and a note that the pack is automated research for a human to
@@ -154,15 +157,22 @@ accurate:
 | Research tool calls | The guard counts WebSearch and WebFetch calls against `max_searches` and `max_fetches` |
 | Total tool calls per session | The guard enforces a cap (default 80) to stop runaway loops |
 
+The engine gates each session separately, so `check` warns only when a
+single session (the research, or the draft) plus the summary's reserve is
+over the budget. Research that a run would reuse (its key unchanged and its
+record present) is left out of the estimate.
+
 Default estimates: research $0.75, draft $1.00, repair $0.40, critic $1.00,
 fix $0.50, summary $0.50. A task's `budget_usd` replaces the default for its
-draft session; its other sessions use the defaults. Estimates are ceilings,
-not predictions: a typical session costs a fraction of its estimate.
+draft session; its other sessions use the defaults. Estimates are planning
+figures, not predictions: a typical session costs a fraction of its estimate,
+while its hard cap is 1.5 × the estimate (or what is left of the budget), and
+it can overshoot that by one model call. The run budget is the hard limit.
 
 Research sessions use the model of the `draft` tier, whatever the task's
 tier: gathering sources doesn't need the stronger model.
 
-**Rate limits.** A `rate_limit_event` with a non-allowed status, or a
+**Rate limits.** A `rate_limit_event` whose status is `rejected`, or a
 recognised rate-limit error, stops the run cleanly. The manifest records the
 reset time, and the CLI exits `6` and prints *resume after HH:MM*. With
 `--wait-on-rate-limit`, the engine sleeps until the reset plus 60 s, provided
@@ -207,12 +217,24 @@ skipped in this run, even when a person's edits stand in for it.
   cannot be read is never reclaimed; the hint says to delete it if no run is
   active.
 
+## Stopping early
+
+A run that stops for any reason (budget, time, rate limit, interrupt, error)
+still renders what it finished into `out/`, keeping a person's edits, unless
+rendering itself failed. If outputs changed, the summary is owed: on a budget
+stop with time left, the summary session runs on its reserve; otherwise
+`00-summary.md` has only the code-written parts and a note, and the next run
+that finishes writes the summary. A run stopped by `max_time` before a
+session can start says how much time a session needs (60 s plus a 30 s
+margin).
+
 ## Run manifest
 
 `.spadework/runs/<run-id>/manifest.json` is written when the run starts,
 after each session, and on **every** exit path, including errors and
 interrupts. Each session's log is created under `sessions/` when the session
-starts, named `NNN-<task>-<kind>.jsonl`. The run id is a UTC timestamp plus 4
+starts, named `NNN-<task>-<kind>.jsonl` (`NNN-critic.jsonl` and
+`NNN-summary.jsonl` for the review's sessions). The run id is a UTC timestamp plus 4
 random hex characters, for example `20260927T210411Z-3f9a`.
 
 ```json
@@ -230,6 +252,7 @@ random hex characters, for example `20260927T210411Z-3f9a`.
     {
       "n": 1, "task": "scope", "kind": "draft", "round": 0,
       "model": "sonnet", "key": "sha256:…", "status": "ok",
+      "summary": "Scope: a catalogue site with no e-commerce, in two phases.",
       "cost_usd": 0.21, "duration_s": 72.4,
       "usage": { "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0 },
       "tool_calls": { "Read": 3, "Write": 1 },

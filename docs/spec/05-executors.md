@@ -73,7 +73,8 @@ depends on any backend's wire format:
 |---|---|
 | `ToolCall` | `name`, `target` (path, URL or query, shortened) |
 | `Text` | `snippet` (one line) |
-| `Denied` | `name`, `target`, `reason`: a tool call the guard denied |
+| `Denied` | `name`, `target`, `reason`: a tool call the guard or the permission mode refused |
+| `Notice` | `message`: something the user should know, such as running without restricted mode |
 | `RateLimit` | `status`, `resets_at` |
 | `Finished` | the `SessionResult` |
 
@@ -205,7 +206,9 @@ another Claude Code session can fail to authenticate; `doctor` runs
 ## `fake` (tests and demos)
 
 A deterministic executor for tests and for trying the CLI without spending
-anything (`SPADEWORK_EXECUTOR=fake`).
+anything (`SPADEWORK_EXECUTOR=fake`). `SPADEWORK_FAKE_SCRIPT` names a JSON or
+TOML file that scripts its behaviour per task and session kind. The costs it
+reports are simulated, and are labelled so.
 
 - It plays back scripted behaviour per session kind: it writes a plausible
   output file into the staging dir and returns a schema-valid result.

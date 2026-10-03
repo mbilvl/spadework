@@ -677,7 +677,11 @@ def test_a_rate_limit_in_the_review_stops_the_run_and_it_resumes(
     ran = runner({"critic": {"fail": "rate_limit", "times": 1}})
 
     assert ran.code == ExitCode.RATE_LIMITED
-    assert not (runner.root / "out").exists()
+    # The drafts are rendered, with a summary that code writes until a run
+    # finishes; the review and the summary are still owed.
+    summary = (runner.root / "out" / "00-summary.md").read_text()
+    assert "The prose summary is written when a run finishes." in summary
+    assert (runner.root / "out" / "03-plan.md").is_file()
     assert ran.state.review is not None
 
     resumed = runner()
@@ -1028,3 +1032,63 @@ def test_a_summary_whose_record_was_saved_is_not_written_again(
     assert ran.executor.sessions == []
     assert ran.code == 0
     assert "## Executive summary" in (runner.root / "out" / "00-summary.md").read_text()
+
+
+def test_a_fix_is_given_the_tasks_own_instructions(runner: Runner) -> None:
+    findings = critic(finding("F1", "02-landscape.md"))
+
+    ran = runner({"critic": {"structured": findings, "times": 1}})
+
+    [fix] = ran.executor.of("landscape", "fix")
+    prompt = fix.spec.prompt
+    assert "## The task\n\nThe document's own instructions." in prompt
+    # The fixture's landscape body, rendered as for its draft: its dependency's
+    # key facts and its research.
+    assert "Build on 01-overview.md:\n- Overview: placeholder content" in prompt
+    assert "[S1] Example Directory: landscape" in prompt
+    assert prompt.index("## Findings") < prompt.index("## The task")
+
+
+def test_a_repair_after_a_fix_keeps_the_tasks_instructions(runner: Runner) -> None:
+    forbid_the_fakes_revision(runner)
+
+    ran = runner()
+
+    [repair] = ran.executor.of("overview", "repair")
+    assert "## The task\n\nThe document's own instructions." in repair.spec.prompt
+    assert "Summarise Acme Fabrication — test pack for acme-fabrication." in (
+        repair.spec.prompt
+    )
+
+
+def test_a_task_template_that_fails_in_a_fix_is_a_notice(runner: Runner) -> None:
+    runner()
+    task = runner.root / "playbooks" / "valid" / "tasks" / "landscape.md"
+    task.write_text(task.read_text() + "First: {{ research.sources[0].title }}\n")
+    nothing = {"sources": [], "notes": "Nothing found.", "unanswered": ["All"]}
+
+    brief = runner.root / "brief.md"
+    brief.write_text(brief.read_text() + "\nMore.\n")
+
+    # The new research finds nothing, so the template fails at run time: the
+    # draft fails, and its earlier document is reviewed and fixed without it.
+    ran = runner(
+        {
+            "landscape:research": {"structured": nothing},
+            "critic": {
+                "structured": critic(finding("F1", "02-landscape.md")),
+                "times": 1,
+            },
+        },
+        refresh_research=True,
+    )
+
+    assert ran.tasks()["landscape"] == "failed"
+    assert any(
+        n.message.startswith("landscape: the task template failed (")
+        and "the fix is not given the task's instructions" in n.message
+        for n in ran.of(ev.Notice)
+    )
+    fixes = ran.executor.of("landscape", "fix")
+    assert fixes
+    assert all("## The task" not in fix.spec.prompt for fix in fixes)

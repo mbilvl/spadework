@@ -25,6 +25,7 @@ from spadework.executors.base import (
     ToolCall,
     Usage,
     ignore_events,
+    is_simulated,
 )
 
 EXECUTORS = ("claude-cli", "fake")
@@ -49,6 +50,7 @@ __all__ = [
     "Usage",
     "get_executor",
     "ignore_events",
+    "is_simulated",
 ]
 
 

@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
+from spadework.executors.base import is_simulated
 from spadework.manifest import Outcome
 from spadework.plan import Plan
 from spadework.validators import ValidatorResult
@@ -55,6 +56,11 @@ class RunStarted:
     rounds: int
     tasks: tuple[str, ...]
     """The tasks this run will work on, in order."""
+
+    @property
+    def simulated(self) -> bool:
+        """The executor calls no model: every cost is simulated."""
+        return is_simulated(self.executor)
 
 
 @dataclass(frozen=True)
@@ -150,6 +156,8 @@ class RunFinished:
     """Tasks whose research met calls the sandbox blocked (I11)."""
     manifest: str = ""
     """The manifest, relative to the project."""
+    simulated: bool = False
+    """The executor called no model: ``cost_usd`` is simulated, not spent."""
 
 
 Event: TypeAlias = (
@@ -210,7 +218,11 @@ def event_document(event: Event, ts: str) -> dict[str, Any]:
                 "run_id": event.run_id,
                 "project": event.project,
                 "playbook": {"name": event.playbook, "version": event.playbook_version},
-                "executor": {"name": event.executor, "version": event.executor_version},
+                "executor": {
+                    "name": event.executor,
+                    "version": event.executor_version,
+                    "simulated": event.simulated,
+                },
                 "limits": {
                     "budget_usd": event.budget_usd,
                     "max_time_s": event.max_time_s,

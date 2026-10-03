@@ -323,6 +323,7 @@ def pack_document(
                 "title": document.task.title,
                 "file": document.output,
                 "state": document.state,
+                "status": None if result is None else result.status,
                 "validators_ok": document.validators_ok,
                 "summary": None if result is None else result.summary,
                 "key_facts": [] if result is None else list(result.key_facts),
@@ -409,6 +410,13 @@ def summary_markdown(
     """``out/00-summary.md``: the session's prose, then what code writes."""
     if record is not None and record.result is not None and prose is not None:
         head = prose.rstrip("\n")
+    elif record is not None and record.pending:
+        head = (
+            f"# {md(title)}\n\nThe summary of this research pack.\n\n"
+            "The last run stopped before it finished, so this page has only the "
+            "parts that code writes. The prose summary is written when a run "
+            "finishes."
+        )
     else:
         why = "" if record is None or not record.error else f" ({md(record.error)})"
         head = (
@@ -441,6 +449,9 @@ def documents_section(documents: Sequence[Document]) -> str:
         state = _STATE_LABELS.get(document.state, document.state)
         if document.path is None and document.state != "pending":
             state += ", no document"
+        elif document.record is not None and document.record.result.status == "partial":
+            # The session said part of its task could not be done (its gaps).
+            state += ", partial"
         checks = "—"
         if document.pinned:
             checks = "— (edited by a person)"
@@ -543,7 +554,13 @@ def produced_section(produced: Produced | None) -> str:
             f"{produced.playbook.replace('@', ' ')}, executor "
             f"{produced.executor.replace('@', ' ')}",
             f"- Cost: ${produced.cost_usd:.2f} in total over {runs}, "
-            f"${produced.run_cost_usd:.2f} of it in the run that wrote this summary",
+            f"${produced.run_cost_usd:.2f} of it in the run that wrote this summary"
+            + (
+                ", all simulated by the fake executor: no model was called and "
+                "nothing was spent"
+                if produced.simulated
+                else ""
+            ),
         ]
     lines.append(f"- {NOTICE}")
     return "\n".join(lines)

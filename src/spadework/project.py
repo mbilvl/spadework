@@ -6,13 +6,15 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from spadework.brief import BRIEF_FILE, Brief, load_brief
+from spadework.brief import BRIEF_FILE, Brief, load_brief, unused_key_warnings
 from spadework.config import CONFIG_FILE, ProjectConfig, load_config
 from spadework.errors import InvalidError, Problem
 from spadework.inputs import (
     INPUTS_DIR,
     SOFT_LIMIT_BYTES,
     InputFile,
+    ignored_inputs,
+    ignored_inputs_warning,
     scan_inputs,
     total_size,
 )
@@ -25,6 +27,9 @@ from spadework.textfiles import toml_key_lines
 class CheckWarning:
     message: str
     hint: str
+    path: str | None = None
+    """The file it is about, relative to the project, when it is about one."""
+    line: int | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,22 @@ class Project:
     brief: Brief
     inputs: tuple[InputFile, ...]
     warnings: tuple[CheckWarning, ...]
+    ignored_inputs: tuple[str, ...] = ()
+    """Files in inputs/ that are not .md or .txt, as inputs/<name>."""
+
+    def ignored_inputs_warning(self) -> CheckWarning | None:
+        warning = ignored_inputs_warning(self.ignored_inputs)
+        return None if warning is None else CheckWarning(*warning)
+
+
+def find_project(start: Path) -> Path | None:
+    """The nearest folder with a spadework.toml: ``start``, or the first
+    folder above it that has one, as git finds a repository."""
+    folder = start.absolute()
+    for candidate in (folder, *folder.parents):
+        if (candidate / CONFIG_FILE).is_file():
+            return candidate
+    return None
 
 
 def load_project(root: Path) -> Project:
@@ -75,9 +96,9 @@ def load_project(root: Path) -> Project:
     brief = load_brief(root / BRIEF_FILE, playbook)
     inputs = tuple(scan_inputs(root / INPUTS_DIR, root))
     check_templates(config.project.name, brief, playbook, inputs)
-    return Project(
-        root, config, playbook, brief, inputs, tuple(_warnings(brief, playbook, inputs))
-    )
+    ignored = tuple(ignored_inputs(root / INPUTS_DIR))
+    warnings = _warnings(brief, playbook, inputs, ignored)
+    return Project(root, config, playbook, brief, inputs, tuple(warnings), ignored)
 
 
 def _check_brief_link(root: Path) -> None:
@@ -109,9 +130,18 @@ def _playbook_line(config_path: Path) -> int | None:
 
 
 def _warnings(
-    brief: Brief, playbook: Playbook, inputs: tuple[InputFile, ...]
+    brief: Brief,
+    playbook: Playbook,
+    inputs: tuple[InputFile, ...],
+    ignored: tuple[str, ...],
 ) -> list[CheckWarning]:
-    warnings = []
+    warnings = [
+        CheckWarning(problem.message, hint, problem.path, problem.line)
+        for problem, hint in unused_key_warnings(brief, playbook)
+    ]
+    ignored_warning = ignored_inputs_warning(ignored)
+    if ignored_warning is not None:
+        warnings.append(CheckWarning(*ignored_warning))
     size = total_size(inputs)
     if size > SOFT_LIMIT_BYTES:
         warnings.append(

@@ -6,8 +6,9 @@ task's state and reason. Planning reads and never writes.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from spadework.config import LimitsSection, ModelsSection
 from spadework.engine.prompts import ENGINE_PROMPT_VERSION
@@ -16,6 +17,7 @@ from spadework.plan import Plan, build_plan
 from spadework.project import Project
 from spadework.state import (
     OUT_DIR,
+    STATE_DIR,
     DerivedStatus,
     State,
     derive_statuses,
@@ -65,6 +67,45 @@ def _unedited_outputs(
     return seen
 
 
+def reused_research(
+    root: Path, state: State, materials: Mapping[str, TaskMaterial]
+) -> frozenset[str]:
+    """Tasks whose stored research matches their research key: a run reuses it."""
+    reused = set()
+    for task_id, material in materials.items():
+        key = material.research_key
+        name = None if key is None else state.research_record(task_id, key)
+        if name is not None and (root / STATE_DIR / name).is_file():
+            reused.add(task_id)
+    return frozenset(reused)
+
+
+RESEARCH_MISSING = "research record missing"
+
+
+def _research_missing(
+    statuses: dict[str, DerivedStatus],
+    materials: Mapping[str, TaskMaterial],
+    present: frozenset[str],
+) -> dict[str, DerivedStatus]:
+    """A fresh or invalid task with research whose record is gone (``clean
+    --cache``) is stale: the next run researches and drafts it again."""
+    changed = dict(statuses)
+    for task_id, status in statuses.items():
+        has_research = materials[task_id].research is not None
+        if (
+            has_research
+            and task_id not in present
+            and status.state
+            in (
+                "fresh",
+                "invalid",
+            )
+        ):
+            changed[task_id] = DerivedStatus.of("stale", [RESEARCH_MISSING])
+    return changed
+
+
 def plan_project(
     project: Project,
     state: State | None = None,
@@ -73,12 +114,15 @@ def plan_project(
     limits: LimitsSection | None = None,
     only: Sequence[str] = (),
     force: bool = False,
+    refresh_research: bool = False,
 ) -> Planned:
     """Plan a run of ``project``. ``state`` defaults to its ``state.json``.
 
     ``--force`` makes the selected tasks stale. A pinned task is forced only
     when ``--only`` names it: ``--force`` on its own never replaces a
-    person's edits (docs/spec/02-project-layout.md, Human edits).
+    person's edits (docs/spec/02-project-layout.md, Human edits). Research
+    whose key is unchanged and whose record exists is reused, so it costs
+    nothing in the plan, unless ``--refresh-research``.
     """
     if state is None:
         state = load_state(state_path(project.root))
@@ -110,5 +154,15 @@ def plan_project(
                     f"To replace your edits: spadework run --force --only {task_id}",
                 )
             )
-    plan = build_plan(project, statuses, models=models, limits=limits, only=only)
+    present = reused_research(project.root, state, materials)
+    statuses = _research_missing(statuses, materials, present)
+    reused = frozenset() if refresh_research else present
+    plan = build_plan(
+        project,
+        statuses,
+        models=models,
+        limits=limits,
+        only=only,
+        reused_research=reused,
+    )
     return Planned(plan, state, materials, statuses, pinned, replaced, tuple(warnings))

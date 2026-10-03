@@ -98,14 +98,14 @@ mobile, and for low running cost.
 Templates are rendered with Jinja2's `SandboxedEnvironment` and
 `StrictUndefined`, so a missing variable is an error in `check` rather than a
 silently empty string. Autoescaping is off, and `trim_blocks`,
-`lstrip_blocks` and `keep_trailing_newline` keep Jinja2's defaults (off, off,
-on). Templates cannot touch the filesystem outside the playbook folder.
+`lstrip_blocks` are off (Jinja2's defaults), and `keep_trailing_newline` is
+on. Templates cannot touch the filesystem outside the playbook folder.
 `check` renders every template, using placeholders for values that exist
 only during a run.
 
 | Rendered as | Variables |
 |---|---|
-| Task body (draft, repair, fix) | `brief` (fields, `extra`, `body`), `task`, `project`, `files` (the staged files, each with its first heading), `deps` (per dependency: `output`, `key_facts`), `research` (notes and sources, when present) |
+| Task body (draft, repair, fix; fix sessions get it as the task's instructions the fixed document must still follow) | `brief` (fields, `extra`, `body`), `task`, `project`, `files` (the staged files, each with its first heading), `deps` (per dependency: `output`, `key_facts`), `research` (notes and sources, when present) |
 | `research.questions` | `public_context`, `task`, `brief.language`. **Nothing else.** This is enforced by the render context, not by convention. |
 
 | Variable | Shape |
@@ -151,7 +151,7 @@ Validators run in code after every draft, repair and fix session.
 | `forbidden_phrases` | list | Added to the engine defaults: "lorem ipsum", "as an AI", "in this document we will", "this session", "session 2". Matched as whole words, ignoring case and line breaks. |
 | `max_open_questions` | int, default 6 | Counted from the record, not the text |
 | `citations_resolve` | bool, default on | Every `[S#]` in the document exists in that task's sources; a task without research may cite none. Grouped citations such as `[S1, S3]` count as citing each. |
-| `min_sources` | int | Research tasks only (an error on any other task). Counts the distinct sources the document cites. |
+| `min_sources` | int | Research tasks only: an error in a non-research task's own `validate`; set in `[defaults]`, it applies to research tasks only. Counts the distinct sources the document cites. |
 
 When a validator fails, the engine runs **one** repair session with the
 failure messages. The exception is `min_sources` when the research found

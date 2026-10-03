@@ -142,7 +142,9 @@ def test_verify_without_research_yet(cli: Invoke, quickstart: Path) -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "no sources to check\n"
-    assert "`spadework run` does it" in result.stderr
+    # The command to run next names the project, as it is not the current folder.
+    shown = quickstart.resolve().as_posix()
+    assert f"`spadework run -C {shown}` does it" in result.stderr
 
 
 def test_verify_by_default_never_fetches_special_use_names(

@@ -23,6 +23,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 from spadework import __version__
 from spadework.brief import BRIEF_FILE
@@ -82,7 +83,7 @@ from spadework.engine.verification import (
     counts,
 )
 from spadework.errors import ExitCode, SpadeworkError, UsageError
-from spadework.executors import Executor, SessionKind, get_executor
+from spadework.executors import Executor, SessionKind, get_executor, is_simulated
 from spadework.inputs import INPUTS_DIR, first_heading, match_inputs, scan_inputs
 from spadework.keys import TaskMaterial
 from spadework.lock import LOCK_FILE, ProjectLock
@@ -115,6 +116,7 @@ from spadework.state import OUT_DIR, ReviewProgress, State, save_state, state_pa
 from spadework.validators import (
     ValidatorResult,
     can_repair,
+    failure_summary,
     failures,
     run_validators,
 )
@@ -239,6 +241,7 @@ def _run_project(
             limits=limits,
             only=options.only,
             force=options.force,
+            refresh_research=options.refresh_research,
         )
         reporter(ev.PlanReady(planned.plan, planned.warnings))
         _check_dependencies(project, planned, options.only)
@@ -419,6 +422,8 @@ class _Run:
         self.final: dict[str, str] | None = None
         """Each task's state once the run has rendered."""
         self.summary_error: str | None = None
+        self.render_status: Literal["not started", "rendering", "done"] = "not started"
+        """A render that raised is not tried again on the way out."""
 
     def execute(self) -> RunResult:
         outcome: Outcome = "error"
@@ -458,6 +463,8 @@ class _Run:
                 message = f"unexpected error: {type(exc).__name__}: {exc}"
                 hint = "Run again with -v to see the traceback. Please report it."
                 failure = exc
+            if self.render_status == "not started":
+                self._after_stop(outcome)
         finally:
             self.manifest.finish(
                 outcome,
@@ -804,10 +811,7 @@ class _Run:
             # owed from now on, even if it is interrupted.
             self.state.review = ReviewProgress(run_id=self.run_id)
         self.save_state()
-        failed = [result for result in outcome.validators if not result.ok]
-        reason = None
-        if failed:
-            reason = "validators failed: " + ", ".join(r.name for r in failed)
+        reason = failure_summary(outcome.validators)
         self._finish_task(task.id, entry.status, reason, outcome.validators)
 
     def _fail(self, task: Task, material: TaskMaterial, error: str) -> None:
@@ -863,7 +867,12 @@ class _Run:
 
     def _review(self) -> None:
         """The review rounds and the summary, when an output changed."""
-        review = Review(
+        review = self._reviewer()
+        review.run()
+        self.summary_error = review.summary_error
+
+    def _reviewer(self) -> Review:
+        return Review(
             project=self.project,
             state=self.state,
             sessions=self.sessions,
@@ -878,10 +887,41 @@ class _Run:
             save_state=self.save_state,
             final_states=self.final_states,
         )
-        review.run()
-        self.summary_error = review.summary_error
 
-    def _render(self) -> None:
+    def _after_stop(self, outcome: Outcome) -> None:
+        """Render what a run that stopped had finished, and a summary of it.
+
+        The documents finished so far, ``sources.md`` and ``pack.json`` go
+        into ``out/``, as at the end of any run, and person's edits stay. If
+        this run (or an unfinished one) changed an output, the summary is
+        still owed: on a budget stop with time left, the summary session runs
+        on its reserve; otherwise ``00-summary.md`` has only what code writes.
+        Either way the next run that finishes writes the summary again.
+        """
+        try:
+            if self.state.review is not None:
+                ran = any(s.kind == "summary" for s in self.manifest.sessions)
+                session = (
+                    outcome == "budget"
+                    and not ran
+                    and self.limits.session_fits(self.clock.monotonic())
+                )
+                self._reviewer().summary_after_stop(session=session)
+            self._render(final=False)
+        except KeyboardInterrupt:
+            self.report(ev.Notice("the pack was not rendered: interrupted"))
+        except Exception as exc:
+            self.report(
+                ev.Notice(
+                    f"the pack could not be rendered: {type(exc).__name__}: {exc}",
+                    "`spadework run` renders it when it next finishes.",
+                )
+            )
+
+    def _render(self, *, final: bool = True) -> None:
+        """Render the pack into ``out/``. ``final`` ends the review: a run
+        that stopped leaves it owed."""
+        self.render_status = "rendering"
         self.final = self.final_states()
         executor = self.manifest.executor
         rendered = render_pack(
@@ -903,8 +943,10 @@ class _Run:
         for message, hint in rendered.warnings:
             self.report(ev.Notice(message, hint))
         self.rendered = rendered.written
-        self.state.review = None
+        if final:
+            self.state.review = None
         self.save_state()
+        self.render_status = "done"
 
     def _outcome(self) -> tuple[Outcome, str | None, str | None]:
         final = self.final or self.final_states()
@@ -1001,6 +1043,7 @@ class _Run:
             manifest=os.path.relpath(
                 manifest_path(self.dot, self.run_id), self.root
             ).replace(os.sep, "/"),
+            simulated=is_simulated(self.manifest.executor.name),
         )
 
     def save_state(self) -> None:

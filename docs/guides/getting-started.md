@@ -6,9 +6,10 @@ examples use a fictional project, *Acme Fabrication*.
 
 ## 1. Check your setup
 
-You need Python 3.11 or later and [Claude Code](https://code.claude.com/docs)
-installed and signed in: `claude` must work in your terminal. spadework runs
-your local `claude` and never handles credentials itself.
+spadework runs on macOS and Linux. You need Python 3.11 or later and
+[Claude Code](https://code.claude.com/docs) 2.1.278 or later, installed and
+signed in: `claude` must work in your terminal. spadework runs your local
+`claude` and never handles credentials itself.
 
 ```bash
 spadework doctor
@@ -61,7 +62,9 @@ the comments in it explain each field. The ones that matter most:
   against them.
 
 Below the second `---`, write everything else you know, in plain Markdown.
-It stays on your machine and is never sent to a research session.
+The drafting, review and summary sessions read it, through your Claude Code
+account like any other session. Research sessions, the only kind with web
+access, never see it.
 
 ## 4. Preview the run
 
@@ -70,9 +73,11 @@ spadework check -C acme
 ```
 
 `check` validates everything the run will use and prints the plan: each
-task, whether it needs to run, and an estimate. Estimates are ceilings, not
-predictions; a typical run costs a fraction of them. Errors point to a file
-and a line and say how to fix them.
+task, whether it needs to run, and an estimate for its research and
+drafting. Estimates are for planning: a typical session costs a fraction of
+its estimate, and the review and summary are not included. The hard limit is
+the run's budget. Errors point to a file and a line and say how to fix
+them.
 
 To see exactly what research sessions will be given:
 
@@ -108,8 +113,10 @@ The pack is in `acme/out/`:
 
 Every external fact cites a source such as `[S1]`. spadework fetches each
 source and checks that the quoted passage really is on the page; the result
-shows as a badge (✓ verified, ✗ quote not found, ? could not check). Claims
-that rest only on unverified sources are tagged `[unverified]`.
+shows as a badge: ✓ verified, ✗ quote not found, ? unreachable, ? could
+not check, or ? not checked (verification was turned off). The drafting
+sessions are told to tag claims that rest only on unverified sources as
+`[unverified]`.
 
 The pack is a starting point for your own judgement. Read it critically
 before you act on it.
@@ -123,15 +130,22 @@ When the client answers a question or you have a call, save the notes in
 spadework check -C acme
 ```
 
+Inputs must be Markdown or plain text (`.md` or `.txt`, subfolders
+allowed); convert PDFs and emails first.
+
 `check` shows which tasks are now stale and why, for example
 *inputs/2026-09-30-client-call.md added*. `spadework run -C acme` redoes
-only those tasks and the ones that depend on them.
+only those tasks and the ones that depend on them, and reuses the web
+research. In the built-in playbooks every task reads every input, so a new
+input redrafts the whole pack.
 
 ## 8. Edit the documents
 
-You can edit any file in `out/`. spadework notices, marks that document
-*pinned*, and never overwrites it silently: other tasks use your version as
-it stands. To have spadework redraft it anyway, replacing your edits:
+You can edit any document in `out/`. spadework notices, marks that
+document *pinned*, and never overwrites it silently: other tasks use your
+version as it stands. (An edited `00-summary.md`, `sources.md` or `pack.json`
+is kept too, but it pins nothing and is no longer updated until you delete
+it.) To have spadework redraft a document anyway, replacing your edits:
 
 ```bash
 spadework run -C acme --force --only questions
@@ -145,10 +159,21 @@ spadework run -C acme --force --only questions
 | `spadework logs -C acme` | What each session of the last run did, call by call |
 | `spadework logs -C acme landscape` | Only one task's sessions |
 
-The exit code says how a run ended: `0` complete, `4` finished with some
-tasks failed or invalid, `5` stopped at the budget or time limit, `6`
-stopped by a rate limit, `7` another run holds the project, `130`
-interrupted. After `5`, `6` or `130`, run again to resume. With
+The exit code says how a command ended:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Something unexpected, or Claude Code failed |
+| `2` | A bad option or argument |
+| `3` | The project, brief or playbook needs fixing; the message says where |
+| `4` | The run finished, but some tasks failed or are invalid |
+| `5` | Stopped at the budget or time limit |
+| `6` | Stopped by a rate limit |
+| `7` | Another run holds the project |
+| `130` | Interrupted |
+
+After `5`, `6` or `130`, run again to resume. With
 `--wait-on-rate-limit`, spadework waits for a rate limit to reset instead of
 stopping.
 

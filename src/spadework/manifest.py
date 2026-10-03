@@ -123,6 +123,9 @@ class SessionEntry(StrictModel):
     """Relative to the run folder."""
     error: str | None = None
     """One line on what went wrong, when ``status`` is not ok."""
+    summary: str | None = None
+    """For a draft, repair or fix: the session's one-line summary of the
+    document, as its result gave it."""
 
 
 class Totals(StrictModel):

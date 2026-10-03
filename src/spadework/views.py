@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from spadework.console import Ui
+from spadework.console import Ui, shown
 from spadework.errors import SpadeworkError
 from spadework.plan import SUMMARY_RESERVE_USD, Plan, PlannedTask, task_estimate_usd
 
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from spadework.engine.events import RunFinished
     from spadework.engine.reverify import VerifyReport
     from spadework.engine.status import ProjectStatus
+    from spadework.logs import Run
     from spadework.playbook import Playbook
     from spadework.project import Project
     from spadework.render import PublicView
@@ -67,33 +68,52 @@ def print_plan(ui: Ui, plan: Plan) -> None:
     ui.result()
     table = _table("task", "state", "reason", "est.", right=("est.",))
     for task in plan.tasks:
+        reason = task.reason or ""
+        if task.will_run and task.research_reused:
+            # est. leaves the research out: its stored result is used again.
+            reason = f"{reason}; research reused" if reason else "research reused"
         table.add_row(
             task.id,
             Text(task.state, style=_STATE_STYLES.get(task.state, "")),
-            task.reason or "",
+            reason,
             usd(task.estimate_usd) if task.will_run else "—",
         )
     ui.result(_indented(table))
-    ui.result(
-        f"estimated spend for pending and stale work: up to {usd(plan.estimate_usd)} "
-        f"(cap {usd(limits.budget_usd)})"
+    ui.result(estimate_line(plan))
+
+
+def estimate_line(plan: Plan) -> str:
+    """What the plan's estimate covers, and what else the cap pays for."""
+    limits = plan.limits
+    rest = "the summary comes" if limits.rounds == 0 else "the review and summary come"
+    return (
+        f"estimated spend for research and drafting: up to {usd(plan.estimate_usd)} "
+        f"(cap {usd(limits.budget_usd)}; {rest} out of the same budget)"
     )
 
 
 def plan_warnings(plan: Plan) -> list[tuple[str, str | None]]:
-    """A warning for each task that could never start within the run budget."""
+    """A warning for each session that could never start within the run
+    budget."""
     cap = usd(plan.limits.budget_usd)
     reserve = usd(SUMMARY_RESERVE_USD)
     return [
         (
-            f"task {task.id!r} can never start: its estimate "
-            f"({usd(task.estimate_usd)}) plus the summary's reserve "
-            f"({reserve}) is over the run budget ({cap})",
+            f"task {task.id!r} can never start: its {kind} session's estimate "
+            f"({usd(estimate)}) plus the summary's reserve ({reserve}) is over the "
+            f"run budget ({cap})",
             "Raise limits.budget_usd in spadework.toml, or lower the task's "
             "budget_usd in the playbook.",
         )
-        for task in plan.never_start()
+        for task, kind, estimate in plan.never_start_sessions()
     ]
+
+
+def simulated(executor: str) -> str:
+    """What follows a cost: " (simulated)" when ``executor`` calls no model."""
+    from spadework.executors.base import is_simulated
+
+    return " (simulated)" if is_simulated(executor) else ""
 
 
 def plan_tasks_document(plan: Plan) -> list[dict[str, Any]]:
@@ -114,6 +134,7 @@ def _task_document(task: PlannedTask) -> dict[str, Any]:
         "state": task.state,
         "reason": task.reason,
         "estimate_usd": task.estimate_usd,
+        "research_reused": task.research_reused,
     }
 
 
@@ -245,6 +266,7 @@ def print_playbook(ui: Ui, playbook: Playbook) -> None:
     ui.result(f"{playbook.name} {playbook.version} · {source}", style="bold")
     ui.result(playbook.description)
     ui.result()
+    ui.result(f"folder       {shown(playbook.ref.root)}")
     ui.result(f"brief needs  {', '.join(needs)}")
     ui.result(f"defaults     {' · '.join(default_parts)}")
     ui.result(f"review       up to {manifest.review.max_findings} findings per round")
@@ -266,6 +288,30 @@ def print_playbook(ui: Ui, playbook: Playbook) -> None:
             )
         table.add_row(task.id, text)
     ui.result(_indented(table))
+    if playbook.ref.kind == "built-in":
+        import shlex
+
+        ui.info(
+            "Copy the folder to start a playbook of your own: "
+            f"cp -R {shlex.quote(shown(playbook.ref.root))} ./my-playbook"
+        )
+
+
+def print_runs(ui: Ui, runs: list[tuple[Run, bool]]) -> None:
+    """``logs --list``: each run, and whether it is still going."""
+    table = _table("run", "outcome", "spent", "sessions", "started", right=("spent",))
+    for run, active in runs:
+        manifest = run.manifest
+        table.add_row(
+            run.run_id,
+            run.outcome_text(active=active),
+            "—"
+            if manifest is None
+            else usd(manifest.totals.cost_usd) + simulated(manifest.executor.name),
+            "—" if manifest is None else str(manifest.totals.sessions),
+            run.started_text(),
+        )
+    ui.result(table)
 
 
 def _clock(seconds: float) -> str:
@@ -278,9 +324,10 @@ def _clock(seconds: float) -> str:
 def print_run_finished(ui: Ui, event: RunFinished) -> None:
     """The end of a run: the result on stdout, what to do next on stderr."""
     sessions = f"{event.sessions} session" + ("" if event.sessions == 1 else "s")
+    label = " (simulated)" if event.simulated else ""
     ui.result(
         f"run {event.run_id} · {event.outcome} · {usd(event.cost_usd)} of "
-        f"{usd(event.budget_usd)} · {sessions} · {_clock(event.duration_s)}"
+        f"{usd(event.budget_usd)}{label} · {sessions} · {_clock(event.duration_s)}"
     )
     for path in event.rendered:
         ui.result(f"  wrote {path}")
@@ -352,7 +399,8 @@ def _last_run_text(status: ProjectStatus) -> str:
     sessions = f"{last.totals.sessions} session" + (
         "" if last.totals.sessions == 1 else "s"
     )
-    parts = [last.run_id, outcome, usd(last.totals.cost_usd), sessions]
+    cost = usd(last.totals.cost_usd) + simulated(last.executor.name)
+    parts = [last.run_id, outcome, cost, sessions]
     seconds = run_seconds(last)
     if seconds is not None:
         parts.append(_clock(seconds))
@@ -412,6 +460,7 @@ def status_document(project: Project, status: ProjectStatus) -> dict[str, Any]:
             "ended_at": last.ended_at,
             "duration_s": run_seconds(last),
             "cost_usd": last.totals.cost_usd,
+            "simulated": bool(simulated(last.executor.name)),
             "sessions": last.totals.sessions,
             "guard_denials": last.totals.guard_denials,
             "rate_limit_reset": last.rate_limit_reset,

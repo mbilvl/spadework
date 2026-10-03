@@ -26,6 +26,8 @@ class ValidatorResult(StrictModel):
     ok: bool
     message: str | None = None
     """What failed and how to fix it. None when the validator passed."""
+    detail: str | None = None
+    """The failure in a few words, such as ``312 > 250``, for status lines."""
     repairable: bool = True
     """False when a repair session cannot fix the failure, such as
     ``min_sources`` when the research found too few sources."""
@@ -36,6 +38,8 @@ class ValidatorResult(StrictModel):
         data: dict[str, Any] = handler(self)
         if self.message is None:
             data.pop("message", None)
+        if self.detail is None:
+            data.pop("detail", None)
         if self.repairable:
             data.pop("repairable", None)
         return data
@@ -45,8 +49,24 @@ def _pass(name: str) -> ValidatorResult:
     return ValidatorResult(name=name, ok=True)
 
 
-def _fail(name: str, message: str, *, repairable: bool = True) -> ValidatorResult:
-    return ValidatorResult(name=name, ok=False, message=message, repairable=repairable)
+def _fail(
+    name: str, message: str, detail: str, *, repairable: bool = True
+) -> ValidatorResult:
+    return ValidatorResult(
+        name=name, ok=False, message=message, detail=detail, repairable=repairable
+    )
+
+
+def failure_summary(results: Iterable[ValidatorResult]) -> str | None:
+    """The failed validators in one line, with their specifics, such as
+    ``validators failed: max_lines (312 > 250), required_headings (missing:
+    Cost)``. None when none failed."""
+    failed = [
+        f"{result.name} ({result.detail})" if result.detail else result.name
+        for result in results
+        if not result.ok
+    ]
+    return f"validators failed: {', '.join(failed)}" if failed else None
 
 
 def run_validators(
@@ -114,6 +134,7 @@ def _max_lines(lines: Sequence[str], limit: int) -> ValidatorResult:
         f"The document has {len(lines)} lines; the limit is {limit}. Cut at least "
         f"{_plural(len(lines) - limit, 'line')}: remove repetition, filler and "
         "restated context, and prefer tables to long prose.",
+        f"{len(lines)} > {limit} lines",
     )
 
 
@@ -124,6 +145,7 @@ def _min_lines(lines: Sequence[str], limit: int) -> ValidatorResult:
         "min_lines",
         f"The document has {_plural(len(lines), 'line')}; it needs at least "
         f"{limit}. Cover what the task asks for in full, without padding.",
+        f"{len(lines)} < {limit} lines",
     )
 
 
@@ -157,6 +179,7 @@ def _starts_with_h1(lines: Sequence[str]) -> ValidatorResult:
             "starts_with_h1",
             "The document is empty. It must start with a level-1 heading, "
             "such as '# Tech stack'.",
+            "empty document",
         )
     number, line = first
     headings = _headings(lines[:number])
@@ -167,6 +190,7 @@ def _starts_with_h1(lines: Sequence[str]) -> ValidatorResult:
         f"The first line must be a level-1 heading, such as '# Tech stack', but "
         f"line {number} is {_shorten(line.rstrip())!r}. Start the document with "
         "'# ' and its title, with nothing before it.",
+        f"line {number} is not a level-1 heading",
     )
 
 
@@ -207,6 +231,7 @@ def _required_headings(lines: Sequence[str], names: Sequence[str]) -> ValidatorR
         f"Missing required {'heading' if len(missing) == 1 else 'headings'}: "
         f"{listed}. Add each as a Markdown heading with that name, such as "
         f"'## {missing[0]}'. Any level counts, and case is ignored.",
+        _shorten("missing: " + ", ".join(missing)),
     )
 
 
@@ -226,6 +251,7 @@ def _forbidden_phrases(lines: Sequence[str], phrases: Sequence[str]) -> Validato
     for line in lines:
         starts.append(starts[-1] + len(line) + 1)
     found = []
+    matched: list[tuple[str, list[int]]] = []
     seen: set[str] = set()
     for phrase in phrases:
         if not phrase.split() or phrase.casefold() in seen:
@@ -243,6 +269,7 @@ def _forbidden_phrases(lines: Sequence[str], phrases: Sequence[str]) -> Validato
                 where += ", …"
             label = "line" if len(numbers) == 1 else "lines"
             found.append(f"{phrase!r} ({label} {where})")
+            matched.append((repr(phrase), numbers))
     if not found:
         return _pass("forbidden_phrases")
     return _fail(
@@ -250,6 +277,7 @@ def _forbidden_phrases(lines: Sequence[str], phrases: Sequence[str]) -> Validato
         f"Forbidden {'phrase' if len(found) == 1 else 'phrases'} found: "
         f"{'; '.join(found)}. Rewrite those sentences without them: the document "
         "states findings for the reader and does not describe how it was written.",
+        _shorten(", ".join(phrase for phrase, _ in matched)),
     )
 
 
@@ -262,6 +290,7 @@ def _max_open_questions(result: DraftResult, limit: int) -> ValidatorResult:
         f"The result lists {_plural(count, 'open question')}; the limit for this "
         f"task is {limit}. Keep the {limit} whose answers would change a decision "
         "most, merge related ones, and drop the rest from the result.",
+        f"{count} > {limit}",
     )
 
 
@@ -299,6 +328,7 @@ def _citations_resolve(cited: Sequence[str], known: Sequence[str]) -> ValidatorR
         f"The document cites {brackets}, but {have}. Cite only sources that "
         "exist. Rewrite a claim with no source as an inference, or tag it "
         "[unverified].",
+        _shorten("unknown: " + ", ".join(unknown)),
     )
 
 
@@ -311,6 +341,7 @@ def _min_sources(
             f"The research found {_plural(len(known), 'source')}, and this task "
             f"needs at least {minimum} cited. A repair cannot add sources: run "
             "again with --refresh-research, or lower validate.min_sources.",
+            f"{len(known)} found < {minimum}",
             repairable=False,
         )
     used = [source_id for source_id in cited if source_id in known]
@@ -322,6 +353,7 @@ def _min_sources(
         f"The document cites {_plural(len(used), 'distinct source')}"
         f"{f' ({_id_list(used)})' if used else ''}; it needs at least {minimum}. "
         f"Cite {_id_list(unused)} where they support a claim in the document.",
+        f"{len(used)} cited < {minimum}",
     )
 
 

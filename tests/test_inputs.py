@@ -8,6 +8,8 @@ from spadework.inputs import (
     InputFile,
     first_heading,
     glob_regex,
+    ignored_inputs,
+    ignored_inputs_warning,
     match_inputs,
     scan_inputs,
 )
@@ -42,12 +44,25 @@ def test_inputs_must_be_a_folder(tmp_path: Path) -> None:
         scan_inputs(tmp_path / "inputs")
 
 
-def test_other_file_types_are_rejected(tmp_path: Path) -> None:
+def test_other_file_types_are_ignored(tmp_path: Path) -> None:
+    inputs = tmp_path / "inputs"
+    (inputs / "scans").mkdir(parents=True)
+    (inputs / "brief.pdf").write_bytes(b"%PDF")
+    (inputs / "scans" / "site.PNG").write_bytes(b"\x89PNG")
+    (inputs / "notes.MD").write_text("# Upper case suffix is fine")
+    (inputs / ".hidden.pdf").write_bytes(b"%PDF")
+
+    files = scan_inputs(inputs)
+
+    assert [file.name for file in files] == ["notes.MD"]
+    assert ignored_inputs(inputs) == ["inputs/brief.pdf", "inputs/scans/site.PNG"]
+
+
+def test_text_inputs_that_are_not_utf8_are_still_errors(tmp_path: Path) -> None:
     inputs = tmp_path / "inputs"
     inputs.mkdir()
-    (inputs / "brief.pdf").write_bytes(b"%PDF")
-    (inputs / "notes.MD").write_text("# Upper case suffix is fine")
     (inputs / "bad.md").write_bytes(b"\xff\xfe")
+    (inputs / "brief.pdf").write_bytes(b"%PDF")
 
     with pytest.raises(InvalidError) as caught:
         scan_inputs(inputs)
@@ -55,9 +70,26 @@ def test_other_file_types_are_rejected(tmp_path: Path) -> None:
     assert caught.value.message == "inputs/ holds files spadework cannot use"
     assert [str(p) for p in caught.value.problems] == [
         "inputs/bad.md:1: the file is not valid UTF-8 text",
-        "inputs/brief.pdf: only .md and .txt inputs are supported",
     ]
     assert "Convert them to Markdown or plain text" in caught.value.hint
+
+
+def test_the_warning_for_ignored_inputs() -> None:
+    assert ignored_inputs_warning([]) is None
+    assert ignored_inputs_warning(["inputs/a.pdf"]) == (
+        "inputs/a.pdf is ignored: only .md and .txt inputs are read",
+        "Convert it to Markdown or plain text to use it, or move it out of inputs/.",
+    )
+    assert ignored_inputs_warning(["inputs/a.pdf", "inputs/b.docx"]) == (
+        "2 files in inputs/ are ignored, because only .md and .txt inputs are read: "
+        "inputs/a.pdf, inputs/b.docx",
+        "Convert them to Markdown or plain text to use them, or move them out of "
+        "inputs/.",
+    )
+
+
+def test_ignored_inputs_without_an_inputs_folder(tmp_path: Path) -> None:
+    assert ignored_inputs(tmp_path / "inputs") == []
 
 
 @pytest.mark.parametrize(
@@ -187,13 +219,9 @@ def test_unreadable_folders_are_reported(tmp_path: Path) -> None:
         (root / "inputs" / "private").chmod(0o755)
 
     assert messages == [
-        "inputs/scan.pdf: only .md and .txt inputs are supported",
         "inputs/private: cannot read this folder: Permission denied",
     ]
-    assert hint == (
-        "Convert them to Markdown or plain text, or move them out of inputs/. "
-        "Make the folder readable, or move it out of inputs/."
-    )
+    assert hint == "Make the folder readable, or move it out of inputs/."
 
 
 def test_bad_globs_raise_and_nested_brackets_do_not_warn() -> None:

@@ -42,19 +42,21 @@ def first_heading(text: str) -> str | None:
     return None
 
 
-_UNSUPPORTED = "Convert them to Markdown or plain text, or move them out of inputs/."
+_NOT_TEXT = "Convert them to Markdown or plain text, or move them out of inputs/."
 _UNREADABLE = "Make the folder readable, or move it out of inputs/."
 _LINKED_FOLDER = "Copy the files into inputs/ rather than linking a folder."
 _LINK_OUTSIDE = "Copy the file into inputs/ rather than linking to it."
 
 
 def scan_inputs(directory: Path, root: Path | None = None) -> list[InputFile]:
-    """List the input files, sorted by name. Hidden files are ignored.
+    """List the input files, sorted by name.
 
-    ``root`` is the project folder (default: the parent of ``directory``).
-    Links to files inside it are followed; links to folders, and to files
-    outside it, are not. Raises InvalidError for anything spadework cannot
-    use, including folders it cannot read.
+    Hidden files are ignored, and so are files that are not .md or .txt
+    (``ignored_inputs`` names them, for a warning). ``root`` is the project
+    folder (default: the parent of ``directory``). Links to files inside it
+    are followed; links to folders, and to files outside it, are not. Raises
+    InvalidError for anything else spadework cannot use, including folders
+    it cannot read and files that are not UTF-8.
     """
     real_root = (directory.parent if root is None else root).resolve()
     if not directory.exists() and not directory.is_symlink():
@@ -105,17 +107,16 @@ def scan_inputs(directory: Path, root: Path | None = None) -> list[InputFile]:
                 continue
             path = Path(current, file_name)
             if path.suffix.lower() not in INPUT_SUFFIXES:
-                report("only .md and .txt inputs are supported", path, _UNSUPPORTED)
-                continue
+                continue  # ignored_inputs names it
             if path.is_symlink() and (problem := _link_problem(path, real_root)):
                 report(problem, path, _LINK_OUTSIDE)
                 continue
             try:
-                text = read_text(path, shown(path), _UNSUPPORTED)
+                text = read_text(path, shown(path), _NOT_TEXT)
             except InvalidError as exc:
                 problems.extend(exc.problems)
-                if _UNSUPPORTED not in hints:
-                    hints.append(_UNSUPPORTED)
+                if _NOT_TEXT not in hints:
+                    hints.append(_NOT_TEXT)
                 continue
             name = path.relative_to(directory).as_posix()
             files.append(
@@ -128,6 +129,46 @@ def scan_inputs(directory: Path, root: Path | None = None) -> list[InputFile]:
             problems=problems,
         )
     return sorted(files, key=lambda file: file.name)
+
+
+def ignored_inputs(directory: Path) -> list[str]:
+    """The files in ``directory`` that are not .md or .txt, which spadework
+    ignores, as ``inputs/<name>``. Hidden files are not listed: they are
+    ignored on purpose."""
+    if directory.is_symlink() or not directory.is_dir():
+        return []
+    ignored = []
+    for current, folders, names in os.walk(directory):
+        folders[:] = sorted(
+            folder
+            for folder in folders
+            if not folder.startswith(".") and not Path(current, folder).is_symlink()
+        )
+        for file_name in sorted(names):
+            path = Path(current, file_name)
+            if not file_name.startswith(".") and (
+                path.suffix.lower() not in INPUT_SUFFIXES
+            ):
+                ignored.append(f"{INPUTS_DIR}/{path.relative_to(directory).as_posix()}")
+    return ignored
+
+
+def ignored_inputs_warning(ignored: Sequence[str]) -> tuple[str, str] | None:
+    """The warning for the files ``ignored_inputs`` found, if any."""
+    if not ignored:
+        return None
+    if len(ignored) == 1:
+        return (
+            f"{ignored[0]} is ignored: only .md and .txt inputs are read",
+            "Convert it to Markdown or plain text to use it, or move it out of "
+            f"{INPUTS_DIR}/.",
+        )
+    return (
+        f"{len(ignored)} files in {INPUTS_DIR}/ are ignored, because only .md and "
+        f".txt inputs are read: {', '.join(ignored)}",
+        f"Convert them to Markdown or plain text to use them, or move them out of "
+        f"{INPUTS_DIR}/.",
+    )
 
 
 def _link_problem(path: Path, root: Path) -> str | None:

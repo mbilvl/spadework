@@ -114,6 +114,9 @@ class _Progress:
     spent: float = 0.0
     round: int = 0
     rounds: int = 0
+    executor: str = ""
+    simulated: bool = False
+    """The executor calls no model: every cost shown is simulated."""
     started: float = field(default_factory=time.monotonic)
     rows: dict[str, _Row] = field(default_factory=dict)
 
@@ -134,6 +137,8 @@ class _Progress:
                 )
                 self.budget, self.max_time_s = event.budget_usd, event.max_time_s
                 self.rounds = event.rounds
+                self.executor = _executor(event)
+                self.simulated = event.simulated
                 self.started = time.monotonic()
                 self.rows = {task: _Row(task) for task in event.tasks}
             case ev.SessionStarted():
@@ -222,15 +227,19 @@ class LinesDisplay(_HumanDisplay):
     """Progress as timestamped lines on stderr, one per event."""
 
     def progress_event(self, event: ev.Event) -> None:
+        # Notices may name a spadework command: give it the project's -C, as
+        # Ui.warning and Ui.info do.
         if isinstance(event, ev.Notice) and event.level == "warning":
-            self._line(event.message, warning=True)
+            self._line(self.ui.with_project(event.message), warning=True)
             if event.hint and not self.ui.quiet:
-                self._line(event.hint)
+                self._line(self.ui.with_project(event.hint))
             return
         if isinstance(event, ev.ToolDenied):
             self._line(denial(event), warning=True)
             return
         text = line(event, self.progress)
+        if isinstance(event, ev.Notice) and text is not None:
+            text = self.ui.with_project(text)
         if text is not None and not self.ui.quiet:
             self._line(text)
 
@@ -242,6 +251,18 @@ class LinesDisplay(_HumanDisplay):
             message.append("warning: ", style="bold yellow")
         message.append(text)
         self.ui.err.print(message, soft_wrap=True)
+
+
+SIMULATED = "simulated"
+
+
+def _executor(event: ev.RunStarted) -> str:
+    """The executor, as the run's first line names it."""
+    if event.simulated:
+        return f"{event.executor} (no model is called; costs are {SIMULATED})"
+    if event.executor_version:
+        return f"{event.executor} {event.executor_version}"
+    return event.executor
 
 
 def _who(task: str | None, kind: str) -> str:
@@ -266,7 +287,8 @@ def line(event: ev.Event, progress: _Progress) -> str | None:
             count = len(event.tasks)
             return (
                 f"run {event.run_id} started: {count} "
-                f"{'task' if count == 1 else 'tasks'}, budget {usd(event.budget_usd)}, "
+                f"{'task' if count == 1 else 'tasks'}, executor {_executor(event)}, "
+                f"budget {usd(event.budget_usd)}, "
                 f"max time {format_duration(event.max_time_s)}"
             )
         case ev.SessionStarted():
@@ -280,13 +302,15 @@ def line(event: ev.Event, progress: _Progress) -> str | None:
         case ev.ToolUsed():
             return f"{_who(event.task, event.kind)}: {event.name} {event.target}"
         case ev.SessionFinished():
+            simulated = f", {SIMULATED}" if progress.simulated else ""
             text = (
                 f"{_who(event.task, event.kind)}: {event.status}, "
                 f"{usd(event.cost_usd)}, "
                 f"{elapsed(event.duration_s)} (spent {usd(event.spent_usd)} of "
-                f"{usd(progress.budget)})"
+                f"{usd(progress.budget)}{simulated})"
             )
-            if event.error:
+            # "interrupted, …: interrupted" says it twice.
+            if event.error and event.error != event.status:
                 text += f": {event.error}"
             if event.retry:
                 text += "; trying again"
@@ -346,6 +370,8 @@ class LiveView:
         progress = self.progress
         now = time.monotonic()
         title = f"spadework · {progress.project} · {progress.playbook}"
+        if progress.simulated:
+            title += f" · executor {progress.executor}"
         if progress.round:
             title += f" · round {progress.round}/{progress.rounds}"
         header = Text(title, style="bold")
@@ -383,8 +409,9 @@ class LiveView:
                 if row.research_denials:
                     text = f"possible prompt injection: {text}"
                 warnings.append((row.task, text))
+        simulated = f" ({SIMULATED})" if progress.simulated else ""
         footer = Text(
-            f"spent {usd(progress.spent)} of {usd(progress.budget)} · "
+            f"spent {usd(progress.spent)} of {usd(progress.budget)}{simulated} · "
             f"{elapsed(now - progress.started)} of "
             f"{format_duration(progress.max_time_s)}",
             style="dim",

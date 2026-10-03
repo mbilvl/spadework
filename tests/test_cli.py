@@ -1,3 +1,4 @@
+import json
 import runpy
 import subprocess
 import sys
@@ -206,3 +207,156 @@ def test_exits_raised_by_commands_pass_through(
     result = cli("check", "-C", make_project())
 
     assert (result.exit_code, result.stderr) == (4, "")
+
+
+# --- Finding the project, and naming it in messages ----------------------------
+
+
+def test_commands_find_the_project_from_a_folder_inside_it(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project()
+    (root / "out" / "deep").mkdir(parents=True)
+    monkeypatch.chdir(root / "out" / "deep")
+
+    result = cli("check")
+
+    assert result.exit_code == 0, result.output
+    assert "playbook  fixture 1.0.0" in result.stdout
+    # The commands it suggests work from here as they are: no -C.
+    assert result.stderr == (
+        "See what research sessions will see: spadework check --show-public\n"
+    )
+
+
+def test_errors_found_from_inside_a_project_name_paths_from_here(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project(brief="---\ntitle: T\nraeder: R\n---\n")
+    (root / "out").mkdir()
+    monkeypatch.chdir(root / "out")
+
+    result = cli("check")
+
+    assert result.exit_code == 3
+    assert result.stderr == (
+        "error: ../brief.md:3: 'reader' is required (is 'raeder' on this line a "
+        "misspelling of it?)\n"
+        "Fix the front matter of brief.md, then run `spadework check` again.\n"
+    )
+
+
+def test_without_a_project_here_or_above(
+    cli: Invoke, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = cli("status")
+
+    assert result.exit_code == 3
+    assert result.stderr == (
+        "error: there is no spadework.toml in this folder or any folder above it\n"
+        "Run `spadework init` to create a project, or pass -C PROJECT_FOLDER.\n"
+    )
+
+
+def test_init_never_looks_for_a_project_above(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project()
+    (root / "notes").mkdir()
+    monkeypatch.chdir(root / "notes")
+
+    result = cli("init", "inner", "--playbook", str(root / "playbooks" / "valid"))
+
+    assert result.exit_code == 0, result.output
+    assert (root / "notes" / "inner" / "spadework.toml").is_file()
+
+
+def test_suggested_commands_carry_the_project_given_with_C(
+    cli: Invoke,
+    make_project: MakeProject,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = make_project(brief="---\ntitle: T\n---\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = cli("check", "-C", "acme-fabrication")
+    as_json = json.loads(cli("check", "--json", "-C", root).stdout)
+
+    assert result.exit_code == 3
+    assert result.stderr == (
+        "error: acme-fabrication/brief.md: 'reader' is required\n"
+        "Fix the front matter of brief.md, then run "
+        "`spadework check -C acme-fabrication` again.\n"
+    )
+    # JSON keeps paths relative to the project, and the hint as it is.
+    assert as_json["error"]["problems"][0]["path"] == "brief.md"
+    assert as_json["error"]["hint"] == (
+        "Fix the front matter of brief.md, then run `spadework check` again."
+    )
+
+
+def test_with_project_adds_C_to_each_suggested_command() -> None:
+    ui = Ui(project="clients/acme fab")
+
+    assert ui.with_project(
+        "Run `spadework run`, then `spadework status --json`. "
+        "Or `spadework check -C x`, `spadework init NAME`, `spadework playbooks list`."
+    ) == (
+        "Run `spadework run -C 'clients/acme fab'`, then "
+        "`spadework status -C 'clients/acme fab' --json`. Or `spadework check -C x`, "
+        "`spadework init NAME`, `spadework playbooks list`."
+    )
+    assert Ui().with_project("`spadework run`") == "`spadework run`"
+
+
+@pytest.mark.parametrize("command", ["check", "run", "status", "verify", "doctor"])
+def test_a_project_given_as_an_argument_gets_a_hint(
+    cli: Invoke,
+    make_project: MakeProject,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    make_project()
+    monkeypatch.chdir(tmp_path)
+
+    result = cli(command, "acme-fabrication")
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        f"error: {command} takes no arguments, but was given 'acme-fabrication'\n"
+        f"Did you mean `spadework {command} -C acme-fabrication`?\n"
+    )
+
+
+def test_an_argument_that_is_not_a_folder(cli: Invoke) -> None:
+    result = cli("status", "nope")
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: status takes no arguments, but was given 'nope'\n"
+        "See `spadework status --help`.\n"
+    )
+
+
+@pytest.mark.parametrize("command", ["status", "run", "verify"])
+def test_inputs_that_are_not_text_are_named_by_every_command(
+    cli: Invoke,
+    make_project: MakeProject,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    monkeypatch.setenv("SPADEWORK_EXECUTOR", "fake")
+    monkeypatch.delenv("SPADEWORK_FAKE_SCRIPT", raising=False)
+    root = make_project(inputs={"scan.pdf": b"%PDF-1.7"})
+
+    result = cli(command, "-C", root)
+
+    assert result.exit_code == 0, result.output
+    assert result.stderr.startswith(
+        "warning: inputs/scan.pdf is ignored: only .md and .txt inputs are read\n"
+        "Convert it to Markdown or plain text to use it, or move it out of inputs/.\n"
+    )

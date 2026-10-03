@@ -11,7 +11,7 @@ with regular expressions.
 The schemas are pydantic models. The JSON Schema passed to the executor is
 generated from them, and the engine validates the result again on its side.
 If the result does not match the schema, the session is retried once with
-the validation error. If it fails again, the session is `failed`.
+the validation error. If it fails again, the task is `failed`.
 
 ## Result schemas
 
@@ -67,8 +67,8 @@ the validation error. If it fails again, the session is `failed`.
 
 | Field | Limit | Used by |
 |---|---|---|
-| `status` | `ok` \| `partial` | The task state |
-| `summary` | 1 line | Live view, manifest |
+| `status` | `ok` \| `partial` | `pack.json` and the summary's documents table. The task state comes from the validators. |
+| `summary` | 1 line | `pack.json`, the manifest, the records digest |
 | `key_facts` | ≤ 5 | Passed to dependent sessions. This replaces the prototype's ledger. |
 | `decisions` | ≤ 8 | Summary, `pack.json` |
 | `open_questions` | ≤ 6 | Summary (deduplicated), `pack.json` |
@@ -207,7 +207,7 @@ The whole pack as data, for scripts and for later phases:
 
 | Key | Each entry |
 |---|---|
-| `documents` | `{task, title, file, state, validators_ok, summary, key_facts}`, for every task, in file-name order |
+| `documents` | `{task, title, file, state, status, validators_ok, summary, key_facts}`, for every task, in file-name order; `status` is the session's `ok` or `partial` |
 | `decisions` | `{id, task, decision, reason, reversibility, alternatives}`, with ids like `stack:D1` |
 | `open_questions` | `{id, task, question, why, answer_format}` |
 | `consolidated_questions` | `{question, why, from}`; ids in `from` that name no task question are dropped |

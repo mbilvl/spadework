@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from spadework import doctor
+from spadework import __version__, doctor
 from spadework.doctor import (
     OUTPUT_FILE,
     SECOND_FILE,
@@ -89,7 +89,7 @@ def test_everything_in_place(cli: Invoke, stand_in_claude: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert row(result.stdout, "Python").startswith("✓ Python  3.")
-    assert row(result.stdout, "spadework") == "✓ spadework  0.1.0.dev0"
+    assert row(result.stdout, "spadework") == f"✓ spadework  {__version__}"
     assert row(result.stdout, "Executor") == "✓ Executor  claude-cli (default)"
     assert row(result.stdout, "Claude Code") == f"✓ Claude Code  {stand_in_claude}"
     assert row(result.stdout, "Claude Code version") == (
@@ -220,6 +220,46 @@ def test_a_valid_project_is_checked(cli: Invoke, make_project: MakeProject) -> N
     assert row(result.stdout, "Project") == (
         "✓ Project  acme-fabrication is valid (fixture 1.0.0)"
     )
+
+
+def test_a_project_is_found_from_a_folder_inside_it(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project()
+    (root / "out").mkdir()
+    monkeypatch.chdir(root / "out")
+
+    result = cli("doctor")
+
+    assert row(result.stdout, "Project") == (
+        "✓ Project  acme-fabrication is valid (fixture 1.0.0)"
+    )
+
+
+def test_inputs_it_ignores_are_a_warning(
+    cli: Invoke, make_project: MakeProject
+) -> None:
+    result = cli("doctor", "-C", make_project(inputs={"scan.pdf": b"%PDF"}))
+
+    assert result.exit_code == 0
+    assert row(result.stdout, "Inputs") == (
+        "! Inputs  inputs/scan.pdf is ignored: only .md and .txt inputs are read"
+    )
+    assert "Convert it to Markdown or plain text" in result.stdout
+
+
+def test_lines_are_never_wrapped(
+    cli: Invoke, stand_in_claude: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "40")
+    monkeypatch.setenv("STAND_IN_LOGGED_IN", "false")
+
+    result = cli("doctor")
+
+    # A path stays whole on its line, however narrow the terminal.
+    assert f"✓ Claude Code          {stand_in_claude}\n" in result.stdout
+    hint = next(line for line in result.stdout.splitlines() if "log in" in line)
+    assert hint.startswith("                       Run `claude` and log in.")
 
 
 def test_the_project_config_chooses_the_executor(

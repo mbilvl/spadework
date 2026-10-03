@@ -6,6 +6,14 @@ import pytest
 from spadework.render import TEMPLATE_HINT
 from tests.conftest import BRIEF, Invoke, MakeProject
 
+
+@pytest.fixture(autouse=True)
+def beside_the_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run from the folder that holds the project, so that -C names it as
+    acme-fabrication, and paths in messages are shown from here."""
+    monkeypatch.chdir(tmp_path)
+
+
 PLAN = """\
 playbook  fixture 1.0.0
 budget    $6.00 · 2h · 2 review rounds
@@ -14,7 +22,8 @@ budget    $6.00 · 2h · 2 review rounds
   overview   pending          $0.50
   landscape  pending          $1.25
   plan       pending          $1.25
-estimated spend for pending and stale work: up to $3.00 (cap $6.00)
+estimated spend for research and drafting: up to $3.00 (cap $6.00; the review \
+and summary come out of the same budget)
 """
 
 
@@ -24,7 +33,8 @@ def test_prints_the_plan(cli: Invoke, make_project: MakeProject) -> None:
     assert result.exit_code == 0
     assert result.stdout == PLAN
     assert result.stderr == (
-        "See what research sessions will see: spadework check --show-public\n"
+        "See what research sessions will see: "
+        "spadework check -C acme-fabrication --show-public\n"
     )
 
 
@@ -94,6 +104,7 @@ def test_json(cli: Invoke, make_project: MakeProject) -> None:
         "state": "pending",
         "reason": None,
         "estimate_usd": 1.25,
+        "research_reused": False,
     }
     assert document["estimate_usd"] == 3.0
     assert document["warnings"] == []
@@ -180,7 +191,8 @@ def test_a_total_over_the_cap_is_not_a_warning(
     assert result.exit_code == 0
     assert result.stderr == ""
     assert result.stdout.endswith(
-        "estimated spend for pending and stale work: up to $3.00 (cap $2.50)\n"
+        "estimated spend for research and drafting: up to $3.00 (cap $2.50; the "
+        "review and summary come out of the same budget)\n"
     )
 
 
@@ -200,22 +212,18 @@ def test_warns_when_a_task_could_never_start(
         "Raise limits.budget_usd in spadework.toml, or lower the task's budget_usd "
         "in the playbook.\n"
     )
+    # landscape's research and draft each fit; only plan's draft cannot.
     assert result.stderr == (
-        "warning: task 'landscape' can never start: its estimate ($1.25) plus the "
-        "summary's reserve ($0.50) is over the run budget ($1.70)\n"
+        "warning: task 'plan' can never start: its draft session's estimate ($1.25) "
+        "plus the summary's reserve ($0.50) is over the run budget ($1.70)\n"
         + hint
-        + "warning: task 'plan' can never start: its estimate ($1.25) plus the "
-        "summary's reserve ($0.50) is over the run budget ($1.70)\n"
-        + hint
-        + "See what research sessions will see: spadework check --show-public\n"
+        + "See what research sessions will see: "
+        "spadework check -C acme-fabrication --show-public\n"
     )
-    assert quiet.stderr.count("warning: ") == 2
+    assert quiet.stderr.count("warning: ") == 1
     assert "Raise limits" not in quiet.stderr
     warnings = json.loads(as_json.stdout)["warnings"]
-    assert [w["message"].split(" can")[0] for w in warnings] == [
-        "task 'landscape'",
-        "task 'plan'",
-    ]
+    assert [w["message"].split(" can")[0] for w in warnings] == ["task 'plan'"]
 
 
 def test_a_task_that_just_fits_is_not_a_warning(
@@ -237,7 +245,8 @@ def test_template_exceptions_exit_3(cli: Invoke, make_project: MakeProject) -> N
 
     assert result.exit_code == 3
     assert result.stderr.startswith(
-        "error: playbooks/valid/tasks/plan.md:6: template: division by zero "
+        "error: acme-fabrication/playbooks/valid/tasks/plan.md:6: template: "
+        "division by zero "
         "(ZeroDivisionError)\n"
     )
     assert "bug" not in result.stderr
@@ -257,8 +266,7 @@ def test_os_errors_name_the_path_and_are_not_bugs(
 
     assert result.exit_code == 1
     assert result.stderr == (
-        f"error: cannot use {(root / 'spadework.toml').resolve().as_posix()}: "
-        "Permission denied\n"
+        "error: cannot use acme-fabrication/spadework.toml: Permission denied\n"
         "Check that the path exists and that you may read and write it.\n"
     )
 
@@ -301,44 +309,48 @@ def test_warns_about_large_inputs(cli: Invoke, make_project: MakeProject) -> Non
     assert "warning: inputs/ holds 600 KB, over the 500 KB soft limit" in result.stderr
 
 
+# The project's playbooks, as seen from the folder the tests run in.
+PLAYBOOKS = "acme-fabrication/playbooks"
+
+
 @pytest.mark.parametrize(
     ("fixture", "expected"),
     [
         (
             "cycle",
-            "error: playbooks/cycle/tasks/alpha.md:4: depends_on: tasks depend on each "
-            "other in a cycle: alpha → gamma → beta → alpha\n",
+            f"error: {PLAYBOOKS}/cycle/tasks/alpha.md:4: depends_on: tasks depend on "
+            "each other in a cycle: alpha → gamma → beta → alpha\n",
         ),
         (
             "unknown-dependency",
-            "error: playbooks/unknown-dependency/tasks/ia.md:6: depends_on: there is "
-            "no task 'scop' (did you mean 'scope'?)\n",
+            f"error: {PLAYBOOKS}/unknown-dependency/tasks/ia.md:6: depends_on: there "
+            "is no task 'scop' (did you mean 'scope'?)\n",
         ),
         (
             "duplicate-output",
-            "error: playbooks/duplicate-output/tasks/summary.md:3: output "
+            f"error: {PLAYBOOKS}/duplicate-output/tasks/summary.md:3: output "
             "'01-Scope.md' is also used by task 'scope'\n",
         ),
         (
             "bad-task",
             "error: playbook 'bad-task' is not valid\n"
-            "  playbooks/bad-task/tasks/scope.md:3: output: '00-summary.md' is "
+            f"  {PLAYBOOKS}/bad-task/tasks/scope.md:3: output: '00-summary.md' is "
             "reserved for the file spadework writes itself\n",
         ),
         (
             "bad-manifest",
-            "error: playbooks/bad-manifest/playbook.toml is not valid\n"
-            "  playbooks/bad-manifest/playbook.toml:3: version: 'one' is not valid",
+            f"error: {PLAYBOOKS}/bad-manifest/playbook.toml is not valid\n"
+            f"  {PLAYBOOKS}/bad-manifest/playbook.toml:3: version: 'one' is not valid",
         ),
         (
             "undefined-variable",
-            "error: playbooks/undefined-variable/tasks/scope.md:7: template: brief has "
-            "no 'budget'\n",
+            f"error: {PLAYBOOKS}/undefined-variable/tasks/scope.md:7: template: brief "
+            "has no 'budget'\n",
         ),
         (
             "leaky-research",
-            "error: playbooks/leaky-research/tasks/landscape.md:7: research.questions: "
-            "brief.body is not available to research questions",
+            f"error: {PLAYBOOKS}/leaky-research/tasks/landscape.md:7: "
+            "research.questions: brief.body is not available to research questions",
         ),
     ],
 )
@@ -354,7 +366,9 @@ def test_invalid_playbooks_exit_3_with_an_actionable_error(
     if fixture in ("undefined-variable", "leaky-research"):
         assert hint == TEMPLATE_HINT
     else:
-        assert hint == "Fix the playbook, then run `spadework check` again."
+        assert hint == (
+            "Fix the playbook, then run `spadework check -C acme-fabrication` again."
+        )
 
 
 def test_invalid_config_exits_3(cli: Invoke, make_project: MakeProject) -> None:
@@ -366,9 +380,9 @@ def test_invalid_config_exits_3(cli: Invoke, make_project: MakeProject) -> None:
 
     assert result.exit_code == 3
     assert result.stderr == (
-        "error: spadework.toml:8: unknown key 'limits.budget' (did you mean "
-        "'budget_usd'?)\n"
-        "Fix spadework.toml, then run `spadework check` again.\n"
+        "error: acme-fabrication/spadework.toml:8: unknown key 'limits.budget' "
+        "(did you mean 'budget_usd'?)\n"
+        "Fix spadework.toml, then run `spadework check -C acme-fabrication` again.\n"
     )
 
 
@@ -379,8 +393,9 @@ def test_invalid_brief_exits_3(cli: Invoke, make_project: MakeProject) -> None:
 
     assert result.exit_code == 3
     assert result.stderr == (
-        "error: brief.md: 'reader' is required\n"
-        "Fix the front matter of brief.md, then run `spadework check` again.\n"
+        "error: acme-fabrication/brief.md: 'reader' is required\n"
+        "Fix the front matter of brief.md, then run "
+        "`spadework check -C acme-fabrication` again.\n"
     )
 
 
@@ -388,16 +403,38 @@ def test_missing_brief_exits_3(cli: Invoke, make_project: MakeProject) -> None:
     result = cli("check", "-C", make_project(brief=None))
 
     assert result.exit_code == 3
-    assert result.stderr.startswith("error: brief.md: the file does not exist\n")
+    assert result.stderr.startswith(
+        "error: acme-fabrication/brief.md: the file does not exist\n"
+    )
 
 
-def test_unsupported_inputs_exit_3(cli: Invoke, make_project: MakeProject) -> None:
-    result = cli("check", "-C", make_project(inputs={"scan.pdf": b"%PDF-1.7"}))
+def test_other_kinds_of_inputs_are_ignored_with_a_warning(
+    cli: Invoke, make_project: MakeProject
+) -> None:
+    root = make_project(inputs={"scan.pdf": b"%PDF-1.7", "a.md": "# A"})
+
+    result = cli("check", "-C", root)
+    document = json.loads(cli("check", "--json", "-C", root).stdout)
+
+    assert result.exit_code == 0
+    assert result.stderr.startswith(
+        "warning: inputs/scan.pdf is ignored: only .md and .txt inputs are read\n"
+        "Convert it to Markdown or plain text to use it, or move it out of inputs/.\n"
+    )
+    assert document["inputs"] == [{"path": "inputs/a.md", "bytes": 3}]
+    assert document["warnings"][0]["message"] == (
+        "inputs/scan.pdf is ignored: only .md and .txt inputs are read"
+    )
+
+
+def test_text_inputs_that_are_not_utf8_still_exit_3(
+    cli: Invoke, make_project: MakeProject
+) -> None:
+    result = cli("check", "-C", make_project(inputs={"call.md": b"\xff\xfe"}))
 
     assert result.exit_code == 3
-    assert result.stderr == (
-        "error: inputs/scan.pdf: only .md and .txt inputs are supported\n"
-        "Convert them to Markdown or plain text, or move them out of inputs/.\n"
+    assert result.stderr.startswith(
+        "error: acme-fabrication/inputs/call.md:1: the file is not valid UTF-8 text\n"
     )
 
 
@@ -439,8 +476,8 @@ def test_an_unknown_builtin_playbook_points_at_the_config(
 
     assert result.exit_code == 3
     assert result.stderr.startswith(
-        "error: spadework.toml:5: there is no built-in playbook named "
-        "'no-such-playbook'\n"
+        "error: acme-fabrication/spadework.toml:5: there is no built-in playbook "
+        "named 'no-such-playbook'\n"
         "Built-in playbooks: "
     )
 
@@ -520,5 +557,30 @@ def test_a_brief_linked_from_outside_the_project_is_refused(
 
     assert result.exit_code == 3
     assert result.stderr.startswith(
-        "error: brief.md: is a link to a file outside the project\n"
+        "error: acme-fabrication/brief.md: is a link to a file outside the project\n"
     )
+
+
+def test_research_that_will_be_reused_is_marked(
+    cli: Invoke, make_project: MakeProject, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SPADEWORK_EXECUTOR", "fake")
+    monkeypatch.delenv("SPADEWORK_FAKE_SCRIPT", raising=False)
+    monkeypatch.setenv("COLUMNS", "200")  # one line per task
+    root = make_project()
+    assert cli("run", "-q", "-C", root).exit_code == 0
+    # Inputs never reach research, so landscape's research stays current.
+    (root / "inputs" / "calls").mkdir()
+    (root / "inputs" / "calls" / "2026-09-30-client-call.md").write_text("# Call\n")
+
+    lines = cli("check", "-C", root).stdout.splitlines()
+    document = json.loads(cli("check", "--json", "-C", root).stdout)
+
+    landscape = next(line for line in lines if line.startswith("  landscape"))
+    assert "is stale; research reused" in landscape
+    # The draft alone: the research is not done again.
+    assert landscape.endswith("$0.50")
+    tasks = {task["id"]: task for task in document["tasks"]}
+    assert tasks["landscape"]["research_reused"] is True
+    assert tasks["landscape"]["estimate_usd"] == 0.5
+    assert tasks["overview"]["research_reused"] is False

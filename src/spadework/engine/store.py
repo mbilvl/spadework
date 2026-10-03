@@ -129,6 +129,8 @@ class Produced(StrictModel):
     runs: int = Field(ge=0)
     run_cost_usd: float = Field(ge=0)
     """What the run that wrote the summary spent."""
+    simulated: bool = False
+    """The executor called no model: the costs are simulated, not spent."""
 
 
 class SummaryRecord(StrictModel):
@@ -139,8 +141,12 @@ class SummaryRecord(StrictModel):
     review: str | None = None
     """The run that started the review this summary ends."""
     result: SummaryResult | None
-    """None when the summary session failed: ``error`` says why."""
+    """None when the summary session failed (``error`` says why) or did not
+    run (``pending``)."""
     error: str | None = None
+    pending: bool = False
+    """Written by a run that stopped before it finished: the summary is
+    still owed, and the next run that finishes writes it again."""
     pinned_findings: list[ReviewFinding] = Field(default_factory=list)
     """Review findings against documents a person edited."""
     produced: Produced

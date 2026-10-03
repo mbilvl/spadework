@@ -149,43 +149,64 @@ def python_check(version: tuple[int, ...] = tuple(sys.version_info[:3])) -> Diag
     return Diagnostic("Python", True, f"{shown} (minimum {minimum})")
 
 
-def project_check(base: Path, *, explicit: bool) -> Diagnostic:
-    """Whether ``base`` is a project, and if so whether ``check`` passes."""
+def project_check(base: Path | None, *, explicit: bool) -> list[Diagnostic]:
+    """Whether ``base`` is a project, and if so whether ``check`` passes.
+
+    ``base`` is None when no project was found here or above.
+    """
     from spadework.config import CONFIG_FILE
     from spadework.project import load_project
 
-    if not (base / CONFIG_FILE).is_file():
-        if explicit:
-            return Diagnostic(
-                "Project",
-                False,
-                f"there is no {CONFIG_FILE} in {base}",
-                "Pass -C with a project folder, or create one with `spadework init`.",
+    if base is None or not (base / CONFIG_FILE).is_file():
+        if explicit and base is not None:
+            return [
+                Diagnostic(
+                    "Project",
+                    False,
+                    f"there is no {CONFIG_FILE} in {base}",
+                    "Pass -C with a project folder, or create one with "
+                    "`spadework init`.",
+                )
+            ]
+        return [
+            Diagnostic(
+                "Project", True, "none here (run doctor in a project, or pass -C)"
             )
-        return Diagnostic(
-            "Project", True, "none here (run doctor in a project, or pass -C)"
-        )
+        ]
     try:
         project = load_project(base)
     except SpadeworkError as exc:
-        return Diagnostic(
-            "Project",
-            False,
-            f"`spadework check` fails: {exc.lines()[0]}",
-            exc.hint,
-        )
+        return [
+            Diagnostic(
+                "Project",
+                False,
+                f"`spadework check` fails: {exc.lines()[0]}",
+                exc.hint,
+            )
+        ]
     playbook = project.playbook
-    return Diagnostic(
-        "Project",
-        True,
-        f"{project.config.project.name} is valid ({playbook.name} {playbook.version})",
-    )
+    checks = [
+        Diagnostic(
+            "Project",
+            True,
+            f"{project.config.project.name} is valid "
+            f"({playbook.name} {playbook.version})",
+        )
+    ]
+    ignored = project.ignored_inputs_warning()
+    if ignored is not None:
+        checks.append(
+            Diagnostic("Inputs", False, ignored.message, ignored.hint, required=False)
+        )
+    return checks
 
 
-def _read_config(base: Path) -> ProjectConfig | None:
+def _read_config(base: Path | None) -> ProjectConfig | None:
     """The project's config for choosing the executor, if it can be read."""
     from spadework.config import CONFIG_FILE, load_config
 
+    if base is None:
+        return None
     path = base / CONFIG_FILE
     if not path.is_file():
         return None
@@ -477,19 +498,22 @@ class DoctorReport:
 
 def run_doctor(
     ui: Ui,
-    base: Path,
+    base: Path | None,
     *,
     explicit_project: bool,
     canary: bool,
     json_output: bool,
 ) -> bool:
-    """Print the checks, run the canary if asked, and say whether all passed."""
+    """Print the checks, run the canary if asked, and say whether all passed.
+
+    ``base`` is the project folder, or None when there is no project here.
+    """
     config = _read_config(base)
     choice = choose_executor(config)
     checks = [python_check(), Diagnostic("spadework", True, __version__)]
     executor_lines, executor = executor_checks(choice)
     checks += executor_lines
-    checks.append(project_check(base, explicit=explicit_project))
+    checks += project_check(base, explicit=explicit_project)
     report = DoctorReport(checks, canary_requested=canary)
     if not json_output:
         _print_checks(ui, checks)
@@ -589,20 +613,23 @@ def _symbol(check: Diagnostic) -> str:
 
 
 def _print_checks(ui: Ui, checks: list[Diagnostic]) -> None:
-    from rich.table import Table
+    """One line per check, the names in a column. Lines are never wrapped,
+    so a path in a detail stays whole, on a terminal and in a file."""
     from rich.text import Text
 
-    # A table, so that a long detail or hint wraps inside its own column.
-    table = Table(box=None, show_header=False, pad_edge=False, padding=(0, 2, 0, 0))
-    table.add_column(no_wrap=True)
-    table.add_column(overflow="fold")
+    width = max((len(check.name) for check in checks), default=0)
+    indent = " " * (width + 4)
     for check in checks:
         symbol = _symbol(check)
-        detail = Text(check.detail)
+        first, *rest = check.detail.splitlines() or [""]
+        line = Text.assemble(
+            (symbol, _STYLES[symbol]), " ", check.name.ljust(width), "  ", first
+        )
+        ui.result(line)
+        for more in rest:
+            ui.result(Text(indent + more))
         if check.hint and not check.ok:
-            detail.append("\n" + check.hint, style="dim")
-        table.add_row(Text.assemble((symbol, _STYLES[symbol]), " ", check.name), detail)
-    ui.result(table)
+            ui.result(Text(indent + ui.with_project(check.hint), style="dim"))
 
 
 def _check_document(check: Diagnostic) -> dict[str, Any]:

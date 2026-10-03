@@ -66,7 +66,11 @@ class Material(StrictModel):
 
     @property
     def key(self) -> str:
-        return hash_json(self.model_dump(mode="json"))
+        data = self.model_dump(mode="json")
+        # A playbook without prompt appendices keys as before they counted.
+        if data.get("prompts", "") is None:
+            del data["prompts"]
+        return hash_json(data)
 
 
 class ResearchMaterial(Material):
@@ -78,6 +82,8 @@ class ResearchMaterial(Material):
     questions: str
     """Hash of the rendered research questions."""
     model: str
+    prompts: str | None = None
+    """Hash of the playbook's ``prompts/research.md``, or None without one."""
 
 
 class DraftMaterial(Material):
@@ -97,6 +103,9 @@ class DraftMaterial(Material):
     """The task's research key, or None for a task without research."""
     dependencies: dict[str, str]
     """Each dependency's id to its draft key."""
+    prompts: str | None = None
+    """Hash of the playbook's ``prompts/rules.md`` and ``prompts/draft.md``,
+    or None without either."""
 
 
 class TaskMaterial(Material):
@@ -115,14 +124,21 @@ class TaskMaterial(Material):
 
 
 def research_material(
-    *, engine: str, public_context: str, questions: str, model: str
+    *,
+    engine: str,
+    public_context: str,
+    questions: str,
+    model: str,
+    appendices: Mapping[str, str] | None = None,
 ) -> ResearchMaterial:
-    """``questions`` is the rendered text, not the template."""
+    """``questions`` is the rendered text, not the template. ``appendices``
+    are the playbook's prompt appendices by name; only ``research`` counts."""
     return ResearchMaterial(
         engine=engine,
         public_context=hash_text(public_context),
         questions=hash_text(questions),
         model=model,
+        prompts=prompts_hash(appendices or {}, RESEARCH_APPENDICES),
     )
 
 
@@ -137,8 +153,13 @@ def draft_material(
     model: str,
     research_key: str | None,
     dependency_keys: Mapping[str, str],
+    appendices: Mapping[str, str] | None = None,
 ) -> DraftMaterial:
     """``inputs`` maps each matching input's name to its hash (``input_hashes``).
+
+    ``appendices`` are the playbook's prompt appendices by name: ``rules`` and
+    ``draft`` change what a draft is told, so they count. The critic's, the
+    fixer's and the summary's do not change a draft.
 
     ``dependency_keys`` is the draft key of each dependency. To plan, pass
     their current keys. To record a draft, pass the key of each dependency
@@ -156,7 +177,18 @@ def draft_material(
         model=model,
         research=research_key,
         dependencies=dict(sorted(dependency_keys.items())),
+        prompts=prompts_hash(appendices or {}, DRAFT_APPENDICES),
     )
+
+
+RESEARCH_APPENDICES = ("research",)
+DRAFT_APPENDICES = ("rules", "draft")
+
+
+def prompts_hash(appendices: Mapping[str, str], names: Iterable[str]) -> str | None:
+    """The hash of the named appendices a playbook has, or None if none."""
+    present = {name: appendices[name] for name in names if appendices.get(name)}
+    return hash_json(present) if present else None
 
 
 def research_key(
@@ -228,6 +260,7 @@ def task_materials(
                 public_context=public_context,
                 questions=questions,
                 model=models.draft,
+                appendices=playbook.prompts,
             )
         draft = draft_material(
             engine=engine,
@@ -239,6 +272,7 @@ def task_materials(
             model=models.draft if task.tier == "draft" else models.review,
             research_key=None if research is None else research.key,
             dependency_keys={dep: materials[dep].key for dep in task.depends_on},
+            appendices=playbook.prompts,
         )
         materials[task.id] = TaskMaterial(draft=draft, research=research)
     return materials
@@ -295,6 +329,12 @@ def stale_reasons(
         and old.research.engine != new.research.engine
     ):
         reasons.append("engine prompts changed")
+    if before.prompts != after.prompts or (
+        old.research is not None
+        and new.research is not None
+        and old.research.prompts != new.research.prompts
+    ):
+        reasons.append("playbook prompts changed")
     wording = changed_dependencies or {}
     for dep, key in after.dependencies.items():
         if dep in before.dependencies and before.dependencies[dep] != key:

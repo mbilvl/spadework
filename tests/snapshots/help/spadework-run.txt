@@ -37,6 +37,9 @@ Options:
   --no-color            Disable colour. NO_COLOR is honoured too.
   --help                Show this message and exit.
 
+  To try a run without spending anything, set SPADEWORK_EXECUTOR=fake: no model
+  is called, and placeholder documents are written.
+
   Examples:
 
     spadework run

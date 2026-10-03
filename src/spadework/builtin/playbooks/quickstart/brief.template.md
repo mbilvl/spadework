@@ -16,9 +16,14 @@ reader: "The person scoping this project"
 #   Write: what the project is, who it is for, and where (country or market).
 #   Leave out: names, budgets, internal figures, contacts, and anything you
 #   would not post publicly.
-# It may stay "", but then research has nothing to work from.
+# Write it as a short paragraph on the lines below "public_context: >",
+# indented by two spaces, for example:
+#   public_context: >
+#     A booking app for independent physiotherapy clinics in Ireland, to
+#     replace phone and email bookings.
+# It may stay empty, but then research has nothing to work from.
 # See exactly what research will see with: spadework check --show-public
-public_context: ""
+public_context: >
 
 # Optional. The language the pack is written in, as a language code.
 # Default: en.

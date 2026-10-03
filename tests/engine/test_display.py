@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import re
@@ -28,8 +29,8 @@ STARTED = ev.RunStarted(
     project="acme-fabrication",
     playbook="discovery-website",
     playbook_version="0.1.0",
-    executor="fake",
-    executor_version="0.1.0",
+    executor="claude-cli",
+    executor_version="2.1.278",
     budget_usd=6.0,
     max_time_s=7200,
     rounds=2,
@@ -102,7 +103,8 @@ def test_lines_are_timestamped_one_per_event() -> None:
     lines = err.getvalue().splitlines()
     assert all(re.match(r"\d\d:\d\d:\d\d ", line) for line in lines)
     assert [line[9:] for line in lines] == [
-        "run 20260927T210411Z-3f9a started: 3 tasks, budget $6.00, max time 2h",
+        "run 20260927T210411Z-3f9a started: 3 tasks, executor claude-cli 2.1.278, "
+        "budget $6.00, max time 2h",
         "references research: started (sonnet, cap $1.12, timeout 25m)",
         "references research: WebSearch peers in Portugal",
         "warning: references research: the sandbox blocked WebFetch "
@@ -361,3 +363,81 @@ def test_the_live_view_shows_the_round_and_the_review_sessions() -> None:
     assert re.fullmatch(r"✓  scope\s+fix\s+sonnet\s+\$0\.25\s+1m17s", lines[2])
     assert re.fullmatch(r"✓  critic\s+critic\s+opus\s+\$0\.06\s+0m30s", lines[5])
     assert re.fullmatch(r"▸  summary\s+summary\s+opus\s+\$0\.00\s+0m\d\ds", lines[6])
+
+
+FAKE = dataclasses.replace(STARTED, executor="fake", executor_version="0.1.0")
+
+
+def test_costs_of_the_fake_executor_are_labelled_simulated() -> None:
+    ui, _, err = ui_with_buffers()
+    display = LinesDisplay(ui)
+
+    for event in [
+        FAKE,
+        ev.SessionFinished(1, "scope", "draft", "ok", 0.08, 1, 0, 0.08),
+    ]:
+        display(event)
+
+    lines = [line[9:] for line in err.getvalue().splitlines()]
+    assert lines == [
+        "run 20260927T210411Z-3f9a started: 3 tasks, executor fake (no model is "
+        "called; costs are simulated), budget $6.00, max time 2h",
+        "scope draft: ok, $0.08, 0m01s (spent $0.08 of $6.00, simulated)",
+    ]
+    progress = _Progress()
+    progress.update(FAKE)
+    console = Console(width=160, record=True, no_color=True)
+    console.print(LiveView(progress))
+    text = console.export_text()
+    assert text.splitlines()[0] == (
+        "spadework · acme-fabrication · discovery-website 0.1.0 · executor fake "
+        "(no model is called; costs are simulated)"
+    )
+    assert "spent $0.00 of $6.00 (simulated) · " in text
+    document = ev.event_document(FAKE, "2026-09-27T21:04:11Z")
+    assert document["executor"] == {
+        "name": "fake",
+        "version": "0.1.0",
+        "simulated": True,
+    }
+    assert ev.event_document(STARTED, "t")["executor"]["simulated"] is False
+
+
+def test_an_error_that_repeats_the_status_is_not_repeated() -> None:
+    ui, _, err = ui_with_buffers()
+    display = LinesDisplay(ui)
+
+    for event in [
+        STARTED,
+        ev.SessionFinished(
+            1, "scope", "draft", "interrupted", 0.45, 3, 0, 0.45, "interrupted"
+        ),
+        ev.SessionFinished(2, "scope", "draft", "error", 0.1, 3, 0, 0.55, "boom"),
+    ]:
+        display(event)
+
+    lines = [line[9:] for line in err.getvalue().splitlines()]
+    assert lines[1] == "scope draft: interrupted, $0.45, 0m03s (spent $0.45 of $6.00)"
+    assert lines[2] == "scope draft: error, $0.10, 0m03s (spent $0.55 of $6.00): boom"
+
+
+def test_notice_lines_name_the_project_in_commands() -> None:
+    ui, _, err = ui_with_buffers()
+    ui.project = "acme fabrication"
+    display = LinesDisplay(ui)
+
+    display(STARTED)
+    display(
+        ev.Notice(
+            "the pack could not be rendered",
+            "`spadework run` renders it when it next finishes.",
+        )
+    )
+    display(ev.Notice("`spadework status` shows it", level="info"))
+
+    lines = [line[9:] for line in err.getvalue().splitlines()]
+    assert lines[1:] == [
+        "warning: the pack could not be rendered",
+        "`spadework run -C 'acme fabrication'` renders it when it next finishes.",
+        "`spadework status -C 'acme fabrication'` shows it",
+    ]

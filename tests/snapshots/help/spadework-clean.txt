@@ -1,0 +1,25 @@
+Usage: spadework clean [OPTIONS]
+
+  Remove engine state from .spadework/.
+
+  Give one of --runs, --cache and --all. It never touches spadework.toml,
+  brief.md, inputs/ or out/. It says what it will remove and asks first; without
+  a terminal to ask in, it needs --yes. Exits 7 when a run holds the project.
+
+Options:
+  --runs              Remove every run's manifest and session logs.
+  --cache             Remove the research records, so that the next run
+                      researches again.
+  --all               Remove all of .spadework/.
+  --yes               Do not ask first. Needed without a terminal.
+  -C, --project PATH  Run as if started in PATH, like git -C.
+  -q, --quiet         Print only results, warnings and errors.
+  -v, --verbose       Print more, including tracebacks.
+  --no-color          Disable colour. NO_COLOR is honoured too.
+  --help              Show this message and exit.
+
+  Examples:
+
+    spadework clean --runs
+    spadework clean --cache -C acme-fabrication
+    spadework clean --all --yes

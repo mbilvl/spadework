@@ -21,7 +21,9 @@ an ADR.
 
 ## Invariants
 
-Every invariant has an enforcement mechanism and a test in `tests/security/`.
+Every invariant has an enforcement mechanism and tests: I1–I7, I10 and I11
+in `tests/security/`, I8 in `tests/test_render.py` and
+`tests/test_playbook.py`, and I9 in `tests/verify/`.
 
 ### I1. No code execution, no delegation, no MCP
 
@@ -202,8 +204,8 @@ confirm that the guard is live ([05](05-executors.md)).
   "writable": [],
   "deadline_epoch": 1790550000,
   "caps": { "WebSearch": 6, "WebFetch": 8, "total": 80 },
-  "counters_path": "/…/.spadework/control/003.counters.json",
-  "denials_path": "/…/.spadework/control/003.denials.jsonl"
+  "counters_path": "/…/.spadework/control/003-references-research.counters.json",
+  "denials_path": "/…/.spadework/control/003-references-research.denials.jsonl"
 }
 ```
 
@@ -232,9 +234,10 @@ allow. A call over its cap therefore never causes a DNS lookup, and a
   tool calls can still report.
 - The guard answers with a JSON `permissionDecision` of `allow` or `deny`
   and exit code `0`. A denial carries a one-line reason that the model sees.
-  If the payload or policy is unusable, or the guard hits an internal error,
-  it exits `2` with a generic `internal error` on stderr, which blocks the
-  call. Messages never contain control-plane paths or exception details.
+  If the payload or policy is unusable, it exits `2` with one line saying so
+  (for example *the hook payload is not valid JSON*); after any other error
+  it exits `2` with a generic `internal error`. Exit `2` blocks the call.
+  Messages never contain control-plane paths or exception details.
 - On success, `--event session-start` writes `<session_id>.alive`, holding
   the session id, next to the policy. The executor checks it at `init`.
 - Every denial is appended to the session's denials log as

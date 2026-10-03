@@ -120,5 +120,32 @@ def test_never_start_lists_tasks_that_cannot_fit_with_the_summary_reserve(
     fresh = build_plan(load_project(root), {"landscape": TaskStatus("fresh")})
 
     assert SUMMARY_RESERVE_USD == 0.50
-    assert [task.id for task in plan.never_start()] == ["landscape", "plan"]
+    # Sessions are gated one by one: landscape's research ($0.75) and draft
+    # ($0.50) each fit in $1.20, though not together. plan's draft does not.
+    assert [task.id for task in plan.never_start()] == ["plan"]
+    assert [(t.id, kind, usd) for t, kind, usd in plan.never_start_sessions()] == [
+        ("plan", "draft", 1.25)
+    ]
     assert [task.id for task in fresh.never_start()] == ["plan"]
+
+
+def test_never_start_names_research_that_cannot_fit(make_project: MakeProject) -> None:
+    root = make_project()
+    config = root / "spadework.toml"
+    config.write_text(config.read_text() + "\n[limits]\nbudget_usd = 1.20\n")
+
+    plan = build_plan(load_project(root))
+
+    assert [(t.id, kind) for t, kind, _ in plan.never_start_sessions()] == [
+        ("landscape", "research"),
+        ("plan", "draft"),
+    ]
+    # Research a run would reuse costs nothing, and cannot block the task.
+    reused = build_plan(load_project(root), reused_research={"landscape"})
+    landscape = next(t for t in reused.tasks if t.id == "landscape")
+    assert landscape.research_reused
+    assert landscape.research_estimate_usd == 0.0
+    assert landscape.estimate_usd == 0.5
+    assert landscape.sessions == (("draft", 0.5),)
+    assert [t.id for t in reused.never_start()] == ["plan"]
+    assert reused.estimate_usd == plan.estimate_usd - 0.75

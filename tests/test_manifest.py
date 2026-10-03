@@ -76,8 +76,8 @@ def test_the_spec_example_is_a_valid_manifest() -> None:
     loaded = RunManifest.model_validate_json(json.dumps(SPEC_EXAMPLE))
     dumped = json.loads(loaded.model_dump_json())
     # Every field in the spec, plus the error and reset time, which are null
-    # unless a run or a session ends that way, and the cache creation tokens
-    # that the spec's text adds to the example's usage.
+    # unless a run or a session ends that way, the cache creation tokens that
+    # the spec's text adds to the example's usage, and the session's summary.
     example = SPEC_EXAMPLE["sessions"][0]
     assert dumped == {
         **SPEC_EXAMPLE,
@@ -87,6 +87,7 @@ def test_the_spec_example_is_a_valid_manifest() -> None:
             {
                 **example,
                 "error": None,
+                "summary": None,
                 "usage": {**example["usage"], "cache_creation_tokens": 0},
             }
         ],
@@ -306,3 +307,41 @@ def test_a_newer_manifest(tmp_path: Path) -> None:
 def test_a_missing_manifest(tmp_path: Path) -> None:
     with pytest.raises(SpadeworkError, match="cannot read"):
         load_manifest(tmp_path / "runs" / "x" / "manifest.json")
+
+
+def test_a_manifest_written_before_session_summaries_still_loads(
+    tmp_path: Path,
+) -> None:
+    document = {
+        "schema_version": 1,
+        "run_id": "20260927T210411Z-3f9a",
+        "spadework_version": "0.1.0",
+        "executor": {"name": "claude-cli", "version": "2.1.278"},
+        "playbook": {"name": "discovery-website", "version": "0.1.0"},
+        "limits": {"budget_usd": 6.0, "max_time_s": 7200, "rounds": 2},
+        "started_at": "2026-09-27T21:04:11Z",
+        "ended_at": "2026-09-27T21:47:02Z",
+        "outcome": "complete",
+        "sessions": [
+            {
+                "n": 1,
+                "task": "scope",
+                "kind": "draft",
+                "round": 0,
+                "model": "sonnet",
+                "key": "sha256:abc",
+                "status": "ok",
+                "cost_usd": 0.21,
+                "duration_s": 72.4,
+                "log": "sessions/001-scope-draft.jsonl",
+            }
+        ],
+        "totals": {"cost_usd": 0.21, "sessions": 1, "guard_denials": 0},
+    }
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(document))
+
+    manifest = load_manifest(path)
+
+    assert manifest.sessions[0].summary is None
+    assert manifest.sessions[0].cost_usd == 0.21

@@ -13,7 +13,8 @@ Options:
   --playbook NAME     A built-in playbook, or the path to a playbook folder.
                       [default: discovery-website]
   --force             Allow a folder that is not empty. Replaces its
-                      spadework.toml and brief.md.
+                      spadework.toml and brief.md, and keeps the old ones as
+                      .bak files.
   -C, --project PATH  Run as if started in PATH, like git -C.
   -q, --quiet         Print only results, warnings and errors.
   -v, --verbose       Print more, including tracebacks.

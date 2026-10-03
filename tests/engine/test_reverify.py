@@ -129,11 +129,14 @@ def test_after_an_interrupted_run_only_the_records_change(runner: Runner) -> Non
 
     assert runner(executor=Recording(before=interrupt)).code == ExitCode.INTERRUPTED
 
+    landscape = runner.root / "out" / "02-landscape.md"
+    rendered = landscape.read_bytes()  # the stopped run rendered what it had
+
     report = verify_pack(runner.root, verifier=Stub())
 
     assert report.render_owed
     assert report.written == ()
-    assert not (runner.root / "out").exists()
+    assert landscape.read_bytes() == rendered
     assert research(runner)["verification"]["S1"]["status"] == "verified"
     ran = runner()
     assert "| ✓ verified |" in (runner.root / "out" / "02-landscape.md").read_text()

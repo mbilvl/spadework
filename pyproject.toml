@@ -35,6 +35,13 @@ dependencies = [
     "typer>=0.27",
 ]
 
+[project.urls]
+Homepage = "https://github.com/mbilvl/spadework"
+Repository = "https://github.com/mbilvl/spadework"
+Issues = "https://github.com/mbilvl/spadework/issues"
+Changelog = "https://github.com/mbilvl/spadework/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/mbilvl/spadework/tree/main/docs"
+
 [project.scripts]
 spadework = "spadework.cli:app"
 

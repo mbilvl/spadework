@@ -360,6 +360,8 @@ def _state(document: Document) -> str:
         text += "; edited by a person"
     if document.path is None:
         text += "; there is no document"
+    elif document.record is not None and document.record.result.status == "partial":
+        text += "; partial: part of its task could not be done (see its gaps)"
     return text
 
 
@@ -449,8 +451,10 @@ def fix_prompt(
     *,
     files: Sequence[StagedFile],
     has_research: bool,
+    body: str | None = None,
 ) -> str:
-    """The prompt of a fix session: its findings, and the checks it must pass."""
+    """The prompt of a fix session: its findings, the task's own instructions
+    (``body``, the rendered task body) and the checks it must pass."""
     listed = "\n".join(
         f"- **{finding.id}** ({_finding_kind(finding)}, {finding.severity}): "
         f"{finding.instruction}"
@@ -464,11 +468,19 @@ def fix_prompt(
     listing = _listing(staged, ()).replace(
         f"- `{task.output}`: ", f"- `{task.output}`: your output, the document to fix"
     )
+    instructions = ""
+    if body and body.strip():
+        instructions = (
+            "## The task\n\n"
+            "The document's own instructions. The fixed document must still "
+            f"follow them.\n\n{body.strip()}\n\n"
+        )
     return (
         f"# Fix: {task.title}\n\n"
         f"`{task.output}` holds the document. The review found what follows. "
         "Carry out each finding, or reject it and say why.\n\n"
         f"## Findings\n\n{listed}\n\n"
+        f"{instructions}"
         "## Checked in code when you finish\n\n" + "\n".join(checks) + "\n\n"
         f"{listing}\n\n"
         "## Your output\n\n"

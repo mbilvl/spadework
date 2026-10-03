@@ -56,7 +56,13 @@ from spadework.manifest import (
     session_log,
 )
 from spadework.manifest import Usage as ManifestUsage
-from spadework.records import FixResult, Record, output_schema, validate_result
+from spadework.records import (
+    DraftResult,
+    FixResult,
+    Record,
+    output_schema,
+    validate_result,
+)
 from spadework.sandbox.staging import Staging, StagingError
 from spadework.sandbox.tools import TOOLS_BY_KIND
 from spadework.validators import ValidatorResult
@@ -437,6 +443,7 @@ class SessionRunner:
             rejected_findings=_rejected(record, request.findings),
             log=log,
             error=error,
+            summary=record.summary if isinstance(record, DraftResult) else None,
         )
         self.manifest.add_session(entry)
         self.save_manifest()
@@ -647,7 +654,7 @@ class SessionRunner:
         if room < MIN_SESSION_S:
             if request.keep_s and left - TIME_MARGIN_S >= MIN_SESSION_S:
                 raise self._out_of_time("the time left is kept for the summary")
-            raise self._out_of_time()
+            raise self._too_little_time(left)
         timeout = min(self.limits.session_timeout_s, room)
         return timeout, timeout < self.limits.session_timeout_s
 
@@ -657,6 +664,20 @@ class SessionRunner:
             "time",
             message or f"the run reached its time limit ({limit})",
             f"{RESUME} Pass a longer --max-time if needed.",
+        )
+
+    def _too_little_time(self, left: float) -> RunStopped:
+        """The run cannot start another session: too little of its time is left."""
+        needed = MIN_SESSION_S + TIME_MARGIN_S
+        shown = format_duration(max(int(left), 0))
+        limit = format_duration(self.limits.max_time_s)
+        return RunStopped(
+            "time",
+            f"there is not enough time left to start a session ({shown} of "
+            f"{limit} left; a session needs {format_duration(MIN_SESSION_S)} "
+            f"plus a {format_duration(TIME_MARGIN_S)} margin)",
+            f"{RESUME} Pass a longer --max-time: each session needs at least "
+            f"{format_duration(needed)} of it.",
         )
 
     def _cap(self, request: SessionRequest) -> tuple[float, bool]:

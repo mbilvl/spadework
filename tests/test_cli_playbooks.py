@@ -86,11 +86,13 @@ def test_list_with_no_playbooks(
 def test_show(cli: Invoke, builtins: Path) -> None:
     result = cli("playbooks", "show", "fixture")
 
+    folder = (builtins / "fixture").resolve().as_posix()
     assert result.exit_code == 0
     assert result.stdout.splitlines() == [
         "fixture 1.0.0 · built-in",
         "A small playbook for spadework's own tests.",
         "",
+        f"folder       {folder}",
         "brief needs  title, reader, public_context, priorities",
         "defaults     draft tier · $0.50 per draft · at most 120 lines",
         "review       up to 4 findings per round",
@@ -104,6 +106,10 @@ def test_show(cli: Invoke, builtins: Path) -> None:
         "  plan       Plan",
         "             → 03-plan.md · review · est. $1.25 · after landscape, overview",
     ]
+    assert result.stderr == (
+        "Copy the folder to start a playbook of your own: "
+        f"cp -R {folder} ./my-playbook\n"
+    )
 
 
 def test_show_a_local_playbook(
@@ -120,10 +126,11 @@ def test_show_a_local_playbook(
     result = cli("playbooks", "show", "./mine")
 
     assert result.exit_code == 0
-    assert result.stdout.splitlines()[:7] == [
+    assert result.stdout.splitlines()[:8] == [
         "cycle 0.1.0 · mine",
         "An invalid playbook for spadework's own tests.",
         "",
+        "folder       mine",
         "brief needs  title, reader",
         "defaults     draft tier",
         "review       up to 12 findings per round",
@@ -153,3 +160,49 @@ def test_playbooks_without_a_subcommand_prints_help(cli: Invoke) -> None:
 
     assert result.exit_code == 2
     assert "Usage: spadework playbooks" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["playbooks", "-C", "{root}", "list"],
+        ["-C", "{root}", "playbooks", "list"],
+        ["playbooks", "list", "-C", "{root}"],
+        ["playbooks", "-q", "list"],
+    ],
+)
+def test_global_options_work_on_the_group_too(
+    cli: Invoke, builtins: Path, make_project: MakeProject, args: list[str]
+) -> None:
+    root = make_project()
+
+    result = cli(*(arg.format(root=root) for arg in args))
+
+    assert result.exit_code == 0, result.output
+    if "-q" in args:
+        assert result.stderr == ""
+    else:
+        assert "playbooks/valid" in result.stdout
+
+
+def test_quiet_and_verbose_on_the_group_and_the_command(cli: Invoke) -> None:
+    result = cli("playbooks", "-q", "list", "-v")
+
+    assert result.exit_code == 2
+    assert result.stderr.startswith("error: -q and -v cannot be used together\n")
+
+
+def test_show_s_usage_line_names_its_argument_plainly(cli: Invoke) -> None:
+    result = cli("playbooks", "show", "--help")
+
+    assert result.stdout.startswith("Usage: spadework playbooks show [OPTIONS] NAME\n")
+
+
+def test_list_takes_no_arguments(cli: Invoke, builtins: Path, tmp_path: Path) -> None:
+    result = cli("playbooks", "list", "extra")
+
+    assert result.exit_code == 2
+    assert result.stderr == (
+        "error: playbooks list takes no arguments, but was given 'extra'\n"
+        "See `spadework playbooks list --help`.\n"
+    )

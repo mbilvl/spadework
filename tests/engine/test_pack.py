@@ -109,6 +109,34 @@ def test_00_summary_has_the_prose_then_what_code_writes(runner: Runner) -> None:
     assert f"- Cost: ${cost:.2f} in total over 1 run, ${cost:.2f} of it" in text
     assert "This pack is automated research. A person must review it" in text
     assert "Possible prompt injection" not in text
+    # The tests' executor is the fake: its costs are simulated.
+    assert (
+        "of it in the run that wrote this summary, all simulated by the fake "
+        "executor: no model was called and nothing was spent" in text
+    )
+
+
+def test_real_costs_are_not_called_simulated() -> None:
+    from spadework.engine.documents import produced_section
+    from spadework.engine.store import Produced
+
+    produced = Produced(
+        date="2026-10-03",
+        spadework="0.1.0",
+        playbook="quickstart@0.1.0",
+        executor="claude-cli@2.1.278",
+        cost_usd=0.42,
+        runs=1,
+        run_cost_usd=0.42,
+    )
+
+    text = produced_section(produced)
+
+    assert "- Cost: $0.42 in total over 1 run, $0.42 of it in the run that " in text
+    assert "simulated" not in text
+    assert "simulated by the fake executor" in produced_section(
+        produced.model_copy(update={"simulated": True})
+    )
 
 
 def test_the_cost_counts_every_run(runner: Runner) -> None:
@@ -350,6 +378,7 @@ def test_pack_json(runner: Runner) -> None:
         "title": "Overview",
         "file": "01-overview.md",
         "state": "fresh",
+        "status": "ok",
         "validators_ok": True,
         "summary": "Placeholder overview from the fake executor.",
         "key_facts": ["Overview: placeholder content, no model was called"],
@@ -544,4 +573,24 @@ def test_a_research_task_without_citations_says_so(
         "# Alpha\n\nNothing cited.\n\n## Sources\n\nThis document cites none of "
         "the 5 sources its research found. They are listed in "
         "[sources.md](sources.md).\n"
+    )
+
+
+def test_a_partial_draft_is_marked_but_keeps_its_state(runner: Runner) -> None:
+    partial = {**draft_result("Plan"), "status": "partial", "gaps": ["No dates"]}
+
+    ran = runner({"plan:draft": {"structured": partial}}, review=False)
+
+    # The state comes from the validators; the session's own status is shown.
+    assert ran.tasks()["plan"] == "fresh"
+    assert ran.code == 0
+    data = pack(runner)
+    plan = next(d for d in data["documents"] if d["task"] == "plan")
+    assert (plan["state"], plan["status"]) == ("fresh", "partial")
+    text = out(runner, "00-summary.md")
+    assert "| [03-plan.md](03-plan.md): Plan | fresh, partial | pass | 1 |" in text
+    [summary] = ran.executor.of(None, "summary")
+    assert (
+        "| `03-plan.md` | Plan | fresh; partial: part of its task could not be done"
+        in summary.spec.prompt
     )
